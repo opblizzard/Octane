@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>OCTANE v5 — Inter-Existential Engine</title>
+<link rel="stylesheet" href="css/octane.css"/>
+</head>
+<body>
+<div id="app">
+  <!-- Sidebar -->
+  <nav id="sidebar">
+    <div class="sidebar-header">
+      <div class="logo-mark">⬡</div>
+      <div class="logo-text">
+        <span class="logo-engine">OCTANE</span>
+        <span class="logo-version">v5 · STELLAR</span>
+      </div>
+    </div>
+    <div class="sidebar-status">
+      <span class="status-dot" id="engineDot"></span>
+      <span id="engineStateLabel">DORMANT</span>
+    </div>
+    <ul class="nav-list">
+      <li class="nav-item active" data-screen="dashboard">⬡ Command Center</li>
+      <li class="nav-item" data-screen="src">◎ Stellar Reach</li>
+      <li class="nav-item" data-screen="cbe">⊕ Civilization Bridge</li>
+      <li class="nav-item" data-screen="elx">◈ Existence Lattice</li>
+      <li class="nav-item" data-screen="oan">✦ Ascension Node</li>
+      <li class="nav-divider"></li>
+      <li class="nav-item" data-screen="flows">⇌ Flow Models</li>
+      <li class="nav-item" data-screen="governance">⚖ Governance</li>
+      <li class="nav-item" data-screen="signals">〜 Signals</li>
+      <li class="nav-item" data-screen="bridges">⊞ Bridges</li>
+      <li class="nav-divider"></li>
+      <li class="nav-item" data-screen="metrics">▦ Metrics</li>
+      <li class="nav-item" data-screen="decrees">✉ Decrees</li>
+      <li class="nav-item" data-screen="ethics">⊘ Ethics Log</li>
+      <li class="nav-item" data-screen="settings">◎ Settings</li>
+    </ul>
+    <div class="sidebar-footer">
+      <div class="footer-org">Ionirix LLC</div>
+      <div class="footer-class">Sovereign-Eyes Only</div>
+    </div>
+  </nav>
+
+  <!-- Main Content -->
+  <main id="main">
+    <div id="topbar">
+      <h1 id="screenTitle">Command Center</h1>
+      <div id="topbarMeta">
+        <span id="epochLabel"></span>
+        <button id="igniteBtn" class="btn-ignite">⚡ IGNITE ENGINE</button>
+      </div>
+    </div>
+    <div id="content">
+      <!-- Screens injected here by JS -->
+    </div>
+  </main>
+</div>
+<script src="js/app.js" type="module"></script>
+</body>
+</html>

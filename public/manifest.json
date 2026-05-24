@@ -1,0 +1,12 @@
+{
+  "name": "Octane v4 — Chaos-Governor Edition",
+  "short_name": "Octane v4",
+  "description": "Sovereign AI Operator Dashboard by Ionirix LLC",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#080c12",
+  "theme_color": "#00f5ff",
+  "icons": [
+    { "src": "/octane-icon.svg", "sizes": "any", "type": "image/svg+xml" }
+  ]
+}

@@ -1,0 +1,78 @@
+name = "octane-v5"
+main = "src/index.ts"
+compatibility_date = "2026-05-23"
+compatibility_flags = ["nodejs_compat"]
+routes = [
+	{ pattern = "octane.ionirix.com/*", zone_name = "ionirix.com" }
+]
+
+[assets]
+directory = "./dist"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+
+[ai]
+binding = "AI"
+
+[vars]
+OCTANE_VERSION       = "5.0.0"
+OCTANE_CODENAME      = "STELLAR"
+ENGINE_NAME          = "Octane"
+ENGINE_EDITION       = "Inter-Existential Engine"
+ORG                  = "Ionirix LLC"
+OPERATOR             = "Mirnes — Sovereign Architect"
+ISSUE_DATE           = "2026-05-23"
+CLASSIFICATION       = "Sovereign-Eyes Only"
+
+[[kv_namespaces]]
+binding     = "EXISTENCE_LATTICE_KV"
+id          = "b4fee945275d48d0b4498a5647e1b577"
+preview_id  = "fc624d75bc18494cbdff460902c60164"
+
+[[kv_namespaces]]
+binding     = "OPERATOR_STATE_KV"
+id          = "5a7d1099b3ee48bfa48c27276054c920"
+preview_id  = "cf97903ca4314bb0b9a5cb6d9d441968"
+
+[[d1_databases]]
+binding       = "DB"
+database_name = "octane-v5-db"
+database_id   = "d9c38818-fc53-456b-afe5-373ced1ae7ee"
+
+[[r2_buckets]]
+binding     = "STELLAR_ARCHIVE"
+bucket_name = "octane-v5-stellar-archive"
+
+[[durable_objects.bindings]]
+name       = "SRC_CONDUIT"
+class_name = "StellarReachConduitDO"
+
+[[durable_objects.bindings]]
+name       = "CBE_ENGINE"
+class_name = "CivilizationBridgeEngineDO"
+
+[[durable_objects.bindings]]
+name       = "ELX_LATTICE"
+class_name = "ExistenceLatticeDO"
+
+[[durable_objects.bindings]]
+name       = "OAN_NODE"
+class_name = "OperatorAscensionNodeDO"
+
+[[durable_objects.bindings]]
+name       = "ORCHESTRATION_FEED"
+class_name = "OrchestrationFeedDO"
+
+[[migrations]]
+tag         = "v1"
+new_classes = ["StellarReachConduitDO","CivilizationBridgeEngineDO","ExistenceLatticeDO","OperatorAscensionNodeDO"]
+
+[[migrations]]
+tag         = "v2"
+new_classes = ["OrchestrationFeedDO"]
+
+[placement]
+mode = "smart"
+
+[limits]
+cpu_ms = 50

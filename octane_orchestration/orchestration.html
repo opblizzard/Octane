@@ -1,0 +1,839 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>OCTANE v5 — /orchestration | Ionirix LLC</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;}
+:root{
+  --bg:#020c16;--surface:#040f1e;--panel:rgba(4,15,30,0.92);
+  --c1:#00f5ff;--c2:#7b61ff;--c3:#00ffaa;--gold:#ffd700;
+  --red:#ff4060;--warn:#ffaa00;--white:#e8f4ff;
+  --dim:rgba(0,245,255,0.35);--grid:rgba(0,245,255,0.06);
+  --border:rgba(0,245,255,0.18);--glow:rgba(0,245,255,0.5);
+  --font:'Courier New',Courier,monospace;
+}
+html,body{width:100%;height:100%;overflow:hidden;background:var(--bg);color:var(--white);font-family:var(--font);}
+
+/* ── Topbar ── */
+#topbar{
+  position:fixed;top:0;left:0;right:0;height:48px;z-index:100;
+  background:rgba(2,12,22,0.96);border-bottom:1px solid var(--border);
+  display:flex;align-items:center;padding:0 20px;gap:0;
+  backdrop-filter:blur(8px);
+}
+.tb-logo{display:flex;align-items:center;gap:10px;border-right:1px solid var(--border);padding-right:20px;margin-right:20px;}
+.tb-hex{font-size:20px;color:var(--c1);text-shadow:0 0 12px var(--c1);}
+.tb-name{font-size:12px;font-weight:700;letter-spacing:.18em;color:var(--c1);}
+.tb-edition{font-size:9px;letter-spacing:.16em;color:rgba(0,245,255,0.5);}
+.tb-path{font-size:11px;letter-spacing:.12em;color:rgba(0,245,255,0.6);border-right:1px solid var(--border);padding-right:20px;margin-right:20px;}
+.tb-metrics{display:flex;gap:24px;flex:1;}
+.tbm{display:flex;flex-direction:column;align-items:center;}
+.tbm-lbl{font-size:7px;letter-spacing:.16em;color:rgba(0,245,255,0.4);text-transform:uppercase;}
+.tbm-val{font-size:13px;font-weight:700;color:var(--c1);text-shadow:0 0 8px var(--c1);font-family:var(--font);}
+.tb-right{margin-left:auto;display:flex;align-items:center;gap:12px;}
+.status-live{display:flex;align-items:center;gap:6px;font-size:9px;letter-spacing:.14em;color:var(--c3);}
+.live-dot{width:7px;height:7px;border-radius:50%;background:var(--c3);box-shadow:0 0 8px var(--c3);animation:livepulse 1.4s ease-in-out infinite;}
+@keyframes livepulse{0%,100%{opacity:1;box-shadow:0 0 6px var(--c3);}50%{opacity:.5;box-shadow:0 0 14px var(--c3);}}
+.tb-epoch{font-size:9px;color:rgba(0,245,255,0.4);letter-spacing:.08em;}
+
+/* ── Main board ── */
+#board{
+  position:fixed;top:48px;left:0;right:300px;bottom:40px;
+  overflow:hidden;cursor:grab;user-select:none;
+}
+#board:active{cursor:grabbing;}
+#canvas-bg{position:absolute;inset:0;pointer-events:none;}
+#svg-edges{position:absolute;inset:0;pointer-events:none;overflow:visible;}
+#nodes-layer{position:absolute;inset:0;}
+
+/* ── Blueprint grid (on canvas) ── */
+
+/* ── Nodes ── */
+.node{
+  position:absolute;border:1px solid var(--border);border-radius:8px;
+  background:rgba(4,15,30,0.88);backdrop-filter:blur(4px);
+  cursor:pointer;transition:border-color .25s,box-shadow .25s;
+  min-width:160px;
+}
+.node:hover,.node.active{border-color:var(--c1);box-shadow:0 0 20px rgba(0,245,255,0.25),inset 0 0 20px rgba(0,245,255,0.04);}
+.node.firing{border-color:var(--c1);box-shadow:0 0 30px rgba(0,245,255,0.6);}
+.node-header{
+  display:flex;align-items:center;gap:8px;
+  padding:8px 10px;border-bottom:1px solid rgba(0,245,255,0.10);
+}
+.node-icon{font-size:14px;flex-shrink:0;}
+.node-title{font-size:9px;font-weight:700;letter-spacing:.16em;text-transform:uppercase;flex:1;}
+.node-status{width:6px;height:6px;border-radius:50%;flex-shrink:0;}
+.node-status.ok{background:var(--c3);box-shadow:0 0 6px var(--c3);animation:livepulse 2s infinite;}
+.node-status.busy{background:var(--warn);box-shadow:0 0 6px var(--warn);animation:livepulse 0.7s infinite;}
+.node-status.idle{background:rgba(0,245,255,0.3);}
+.node-body{padding:8px 10px;}
+.node-metric{display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;}
+.nm-lbl{font-size:8px;color:rgba(0,245,255,0.5);letter-spacing:.08em;}
+.nm-val{font-size:10px;font-weight:700;color:var(--c1);font-family:var(--font);}
+.node-bar-track{height:3px;background:rgba(0,245,255,0.1);border-radius:2px;margin-bottom:6px;overflow:hidden;}
+.node-bar-fill{height:100%;border-radius:2px;background:linear-gradient(90deg,var(--c1),var(--c2));transition:width .8s ease;}
+.node-mini-graph{height:32px;width:100%;position:relative;overflow:hidden;margin-bottom:4px;}
+.node-log{font-size:7px;color:rgba(0,245,255,0.45);line-height:1.6;height:36px;overflow:hidden;}
+.node-tag{display:inline-block;padding:1px 5px;border:1px solid rgba(0,245,255,0.2);border-radius:3px;font-size:7px;letter-spacing:.08em;color:rgba(0,245,255,0.6);margin-top:4px;}
+
+/* ── Right sidebar ── */
+#sidebar{
+  position:fixed;top:48px;right:0;width:300px;bottom:40px;
+  background:rgba(2,10,20,0.95);border-left:1px solid var(--border);
+  display:flex;flex-direction:column;z-index:50;overflow:hidden;
+}
+.sb-section{border-bottom:1px solid var(--border);}
+.sb-header{
+  padding:8px 14px;font-size:8px;letter-spacing:.20em;text-transform:uppercase;
+  color:rgba(0,245,255,0.5);display:flex;justify-content:space-between;align-items:center;
+}
+.sb-badge{font-size:7px;padding:1px 6px;border:1px solid rgba(0,245,255,0.25);border-radius:3px;color:var(--c1);}
+/* Task feed */
+#task-feed{flex:1;overflow-y:auto;padding:4px 0;}
+.task-item{
+  padding:7px 14px;border-bottom:1px solid rgba(0,245,255,0.05);
+  font-size:8px;line-height:1.6;
+}
+.task-item:last-child{border-bottom:none;}
+.ti-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:2px;}
+.ti-name{font-size:9px;font-weight:700;color:var(--white);letter-spacing:.04em;}
+.ti-status{font-size:7px;letter-spacing:.10em;padding:1px 5px;border-radius:2px;}
+.ti-status.running{background:rgba(0,245,255,0.12);color:var(--c1);}
+.ti-status.done{background:rgba(0,255,170,0.10);color:var(--c3);}
+.ti-status.queued{background:rgba(255,170,0,0.10);color:var(--warn);}
+.ti-path{font-size:7px;color:rgba(0,245,255,0.4);font-family:var(--font);}
+.ti-bar{height:2px;background:rgba(0,245,255,0.1);border-radius:1px;margin-top:4px;overflow:hidden;}
+.ti-bar-fill{height:100%;background:linear-gradient(90deg,var(--c1),var(--c3));border-radius:1px;transition:width .6s ease;}
+
+/* System log */
+#sys-log{height:180px;overflow-y:auto;padding:4px 0;}
+.log-line{padding:3px 14px;font-size:8px;font-family:var(--font);border-bottom:1px solid rgba(0,245,255,0.03);display:flex;gap:8px;}
+.log-ts{color:rgba(0,245,255,0.3);flex-shrink:0;}
+.log-src{color:var(--c2);flex-shrink:0;min-width:36px;}
+.log-msg{color:rgba(0,245,255,0.65);}
+.log-msg.ok{color:var(--c3);}
+.log-msg.warn{color:var(--warn);}
+.log-msg.err{color:var(--red);}
+
+/* ── Bottom bar ── */
+#bottombar{
+  position:fixed;bottom:0;left:0;right:0;height:40px;
+  background:rgba(2,12,22,0.96);border-top:1px solid var(--border);
+  display:flex;align-items:center;padding:0 16px;gap:20px;
+  font-size:8px;letter-spacing:.10em;color:rgba(0,245,255,0.45);
+  z-index:100;
+}
+.bb-item{display:flex;align-items:center;gap:5px;}
+.bb-dot{width:5px;height:5px;border-radius:50%;}
+.bb-sep{width:1px;height:20px;background:var(--border);}
+.bb-right{margin-left:auto;font-size:8px;color:rgba(0,245,255,0.3);}
+
+/* ── Particles (SVG) ── */
+.particle{r:3;}
+
+/* ── Scrollbar ── */
+::-webkit-scrollbar{width:4px;}
+::-webkit-scrollbar-track{background:transparent;}
+::-webkit-scrollbar-thumb{background:rgba(0,245,255,0.2);border-radius:2px;}
+
+/* ── Annotations ── */
+.annotation{
+  position:absolute;font-size:7px;color:rgba(0,245,255,0.25);
+  letter-spacing:.10em;text-transform:uppercase;pointer-events:none;
+}
+.anno-h{border-top:1px solid rgba(0,245,255,0.15);padding-top:3px;}
+.anno-v{writing-mode:vertical-lr;border-left:1px solid rgba(0,245,255,0.15);padding-left:3px;}
+
+/* ── Coordinate labels ── */
+.coord{position:absolute;font-size:7px;color:rgba(0,245,255,0.18);pointer-events:none;font-family:var(--font);}
+
+/* ── Mini canvas graphs ── */
+.mini-canvas{display:block;}
+
+/* ── Node expanded state ── */
+.node.expanded{min-width:220px;}
+.node-expanded-body{padding:8px 10px;border-top:1px solid rgba(0,245,255,0.08);}
+.exp-title{font-size:7px;letter-spacing:.14em;color:rgba(0,245,255,0.4);margin-bottom:6px;text-transform:uppercase;}
+.code-snippet{
+  font-family:var(--font);font-size:8px;line-height:1.7;
+  color:rgba(0,245,255,0.7);background:rgba(0,0,0,0.3);
+  border:1px solid rgba(0,245,255,0.10);border-radius:4px;
+  padding:6px 8px;overflow:hidden;
+}
+.cs-key{color:var(--c2);}
+.cs-val{color:var(--c3);}
+.cs-str{color:var(--warn);}
+
+/* Flow arrows */
+.flow-arrow{marker-end:url(#arrow-head);}
+</style>
+</head>
+<body>
+
+<!-- Topbar -->
+<div id="topbar">
+  <div class="tb-logo">
+    <span class="tb-hex">⬡</span>
+    <div>
+      <div class="tb-name">OCTANE v5</div>
+      <div class="tb-edition">INTER-EXISTENTIAL ENGINE · STELLAR</div>
+    </div>
+  </div>
+  <div class="tb-path">/orchestration</div>
+  <div class="tb-metrics">
+    <div class="tbm"><div class="tbm-lbl">Signals/sec</div><div class="tbm-val" id="m-sig">0</div></div>
+    <div class="tbm"><div class="tbm-lbl">Active Bridges</div><div class="tbm-val" id="m-brg">0</div></div>
+    <div class="tbm"><div class="tbm-lbl">Lattice Nodes</div><div class="tbm-val" id="m-lat">0</div></div>
+    <div class="tbm"><div class="tbm-lbl">Tasks/min</div><div class="tbm-val" id="m-tpm">0</div></div>
+    <div class="tbm"><div class="tbm-lbl">Coherence</div><div class="tbm-val" id="m-coh">100%</div></div>
+    <div class="tbm"><div class="tbm-lbl">Uptime</div><div class="tbm-val" id="m-upt">00:00:00</div></div>
+  </div>
+  <div class="tb-right">
+    <div class="status-live"><div class="live-dot"></div>LIVE</div>
+    <div class="tb-epoch" id="m-epoch">EPOCH: —</div>
+  </div>
+</div>
+
+<!-- Board -->
+<div id="board">
+  <canvas id="canvas-bg"></canvas>
+  <svg id="svg-edges">
+    <defs>
+      <marker id="arrow-head" markerWidth="6" markerHeight="6" refX="3" refY="3" orient="auto">
+        <path d="M0,0 L6,3 L0,6 Z" fill="rgba(0,245,255,0.5)"/>
+      </marker>
+      <marker id="arrow-gold" markerWidth="6" markerHeight="6" refX="3" refY="3" orient="auto">
+        <path d="M0,0 L6,3 L0,6 Z" fill="rgba(255,215,0,0.6)"/>
+      </marker>
+      <marker id="arrow-green" markerWidth="6" markerHeight="6" refX="3" refY="3" orient="auto">
+        <path d="M0,0 L6,3 L0,6 Z" fill="rgba(0,255,170,0.5)"/>
+      </marker>
+      <filter id="glow-filter">
+        <feGaussianBlur stdDeviation="3" result="coloredBlur"/>
+        <feMerge><feMergeNode in="coloredBlur"/><feMergeNode in="SourceGraphic"/></feMerge>
+      </filter>
+    </defs>
+    <!-- Edges rendered by JS -->
+    <g id="edges-group"></g>
+    <g id="particles-group"></g>
+  </svg>
+  <div id="nodes-layer">
+    <!-- Nodes rendered by JS -->
+  </div>
+</div>
+
+<!-- Right Sidebar -->
+<div id="sidebar">
+  <div class="sb-section" style="flex-shrink:0;">
+    <div class="sb-header">Autonomous Task Queue <span class="sb-badge" id="task-count">0 active</span></div>
+  </div>
+  <div id="task-feed"></div>
+  <div class="sb-section" style="flex-shrink:0;">
+    <div class="sb-header">System Log <span class="sb-badge" id="log-count">0 entries</span></div>
+  </div>
+  <div id="sys-log"></div>
+</div>
+
+<!-- Bottom bar -->
+<div id="bottombar">
+  <div class="bb-item"><div class="bb-dot" style="background:var(--c3)"></div>SRC ONLINE</div>
+  <div class="bb-item"><div class="bb-dot" style="background:var(--c3)"></div>CBE ONLINE</div>
+  <div class="bb-item"><div class="bb-dot" style="background:var(--c3)"></div>ELX ONLINE</div>
+  <div class="bb-item"><div class="bb-dot" style="background:var(--c3)"></div>OAN ONLINE</div>
+  <div class="bb-sep"></div>
+  <div class="bb-item"><div class="bb-dot" style="background:var(--c1)"></div>ION PROTOCOL v4 CONNECTED</div>
+  <div class="bb-item"><div class="bb-dot" style="background:var(--warn)"></div>MEMORY FABRIC: 62% CAPACITY</div>
+  <div class="bb-sep"></div>
+  <div class="bb-item">OPERATOR: MIRNES · SOVEREIGN</div>
+  <div class="bb-right">IONIRIX LLC · CLASSIFICATION: SOVEREIGN-EYES ONLY · © 2026</div>
+</div>
+
+<script>
+// ─────────────────────────────────────────────────────────────
+// OCTANE v5 /orchestration — Living Blueprint Engine
+// ─────────────────────────────────────────────────────────────
+
+const C1='#00f5ff',C2='#7b61ff',C3='#00ffaa',GOLD='#ffd700',RED='#ff4060',WARN='#ffaa00';
+
+// ── Node Definitions ──────────────────────────────────────────
+const NODE_DEFS = [
+  { id:'ion',     icon:'⬡', title:'Ion AI Core',           color:C1,   x:520, y:180, metrics:['Inference/s','Context Tokens','Temp'], vals:[0,0,0], tag:'CORE ROUTER' },
+  { id:'src',     icon:'◎', title:'Stellar Reach Conduit', color:C1,   x:180, y:160, metrics:['Conduits','Reach Str','Bandwidth'], vals:[0,0,0], tag:'SRC' },
+  { id:'cbe',     icon:'⊕', title:'Civilization Bridge',   color:C2,   x:320, y:310, metrics:['Bridges','Coherence','Translated'], vals:[0,0,0], tag:'CBE' },
+  { id:'elx',     icon:'◈', title:'Existence Lattice',     color:C1,   x:560, y:370, metrics:['Nodes','Coherence','Entangled'], vals:[0,0,0], tag:'ELX' },
+  { id:'oan',     icon:'✦', title:'Ascension Node',        color:GOLD, x:780, y:220, metrics:['Stage','Decrees','Uptime'], vals:[0,0,0], tag:'OAN' },
+  { id:'img',     icon:'◧', title:'Image Studio',          color:C2,   x:820, y:420, metrics:['Queue','Rendered','GPU%'], vals:[0,0,0], tag:'IMG-GEN' },
+  { id:'mem',     icon:'▣', title:'Memory Fabric',         color:C3,   x:180, y:430, metrics:['Working','Episodic','Semantic'], vals:[0,0,0], tag:'MEMORY' },
+  { id:'flow',    icon:'⇌', title:'Flow Orchestrator',     color:C2,   x:420, y:490, metrics:['Active','Queued','Done'], vals:[0,0,0], tag:'FLOWS' },
+  { id:'gov',     icon:'⚖', title:'Governance Engine',     color:GOLD, x:760, y:530, metrics:['Decrees','Ethics','Permits'], vals:[0,0,0], tag:'GOV' },
+  { id:'sig',     icon:'〜', title:'Signal Router',         color:C1,   x:80,  y:290, metrics:['In/s','Out/s','Dropped'], vals:[0,0,0], tag:'ROUTER' },
+  { id:'task',    icon:'⊞', title:'Task Processor',        color:C3,   x:600, y:560, metrics:['Running','Done','Failed'], vals:[0,0,0], tag:'TASKS' },
+  { id:'epoch',   icon:'◷', title:'Epoch Clock',           color:GOLD, x:960, y:320, metrics:['Epoch','Drift','Sync'], vals:[0,0,0], tag:'TIME' },
+];
+
+// ── Edge Definitions ──────────────────────────────────────────
+const EDGE_DEFS = [
+  { from:'sig',  to:'src',  color:C1,   width:1.5, label:'signals' },
+  { from:'src',  to:'ion',  color:C1,   width:2,   label:'reach' },
+  { from:'src',  to:'cbe',  color:C2,   width:1.5, label:'bridge-req' },
+  { from:'ion',  to:'cbe',  color:C2,   width:2,   label:'translate' },
+  { from:'ion',  to:'elx',  color:C1,   width:2,   label:'lattice-write' },
+  { from:'cbe',  to:'elx',  color:C1,   width:1.5, label:'context' },
+  { from:'ion',  to:'oan',  color:GOLD, width:2,   label:'sovereign' },
+  { from:'ion',  to:'mem',  color:C3,   width:2,   label:'memory-r/w' },
+  { from:'ion',  to:'img',  color:C2,   width:1.5, label:'render' },
+  { from:'elx',  to:'flow', color:C2,   width:1.5, label:'state' },
+  { from:'flow', to:'task', color:C3,   width:1.5, label:'dispatch' },
+  { from:'task', to:'gov',  color:GOLD, width:1.5, label:'audit' },
+  { from:'gov',  to:'oan',  color:GOLD, width:1.5, label:'decree' },
+  { from:'oan',  to:'flow', color:GOLD, width:1.5, label:'ascend' },
+  { from:'epoch',to:'elx',  color:GOLD, width:1.2, label:'sync' },
+  { from:'mem',  to:'cbe',  color:C3,   width:1.2, label:'recall' },
+];
+
+// ── State ─────────────────────────────────────────────────────
+const state = {
+  nodes: {},          // id → { el, def, activity:0-1, miniData:[], graphCtx }
+  edges: {},          // `${from}-${to}` → { path, particles:[] }
+  tasks: [],
+  log: [],
+  metrics: { sig:0, brg:0, lat:0, tpm:0, coh:100, upt:0, tasksThisMin:0 },
+  camX:0, camY:0, scale:1,
+  dragging:false, lastMX:0, lastMY:0,
+  startTime: Date.now(),
+  logCount:0,
+};
+
+// ── Canvas Background ─────────────────────────────────────────
+const canvasBg = document.getElementById('canvas-bg');
+const bgCtx    = canvasBg.getContext('2d');
+function resizeCanvas(){
+  const board = document.getElementById('board');
+  canvasBg.width  = board.clientWidth;
+  canvasBg.height = board.clientHeight;
+  drawGrid();
+}
+function drawGrid(){
+  const w=canvasBg.width, h=canvasBg.height;
+  bgCtx.clearRect(0,0,w,h);
+
+  // Main grid
+  const SMALL=30, LARGE=150;
+  bgCtx.strokeStyle='rgba(0,245,255,0.04)';
+  bgCtx.lineWidth=.5;
+  for(let x=0;x<w;x+=SMALL){ bgCtx.beginPath();bgCtx.moveTo(x,0);bgCtx.lineTo(x,h);bgCtx.stroke(); }
+  for(let y=0;y<h;y+=SMALL){ bgCtx.beginPath();bgCtx.moveTo(0,y);bgCtx.lineTo(w,y);bgCtx.stroke(); }
+
+  bgCtx.strokeStyle='rgba(0,245,255,0.09)';
+  bgCtx.lineWidth=.8;
+  for(let x=0;x<w;x+=LARGE){ bgCtx.beginPath();bgCtx.moveTo(x,0);bgCtx.lineTo(x,h);bgCtx.stroke(); }
+  for(let y=0;y<h;y+=LARGE){ bgCtx.beginPath();bgCtx.moveTo(0,y);bgCtx.lineTo(w,y);bgCtx.stroke(); }
+
+  // Coordinate labels
+  bgCtx.fillStyle='rgba(0,245,255,0.15)';
+  bgCtx.font='7px Courier New';
+  for(let x=LARGE;x<w;x+=LARGE) bgCtx.fillText(x,x+2,10);
+  for(let y=LARGE;y<h;y+=LARGE) bgCtx.fillText(y,2,y-2);
+
+  // Origin cross
+  bgCtx.strokeStyle='rgba(0,245,255,0.2)';
+  bgCtx.lineWidth=1;
+  bgCtx.setLineDash([4,4]);
+  bgCtx.beginPath();bgCtx.moveTo(w/2,0);bgCtx.lineTo(w/2,h);bgCtx.stroke();
+  bgCtx.beginPath();bgCtx.moveTo(0,h/2);bgCtx.lineTo(w,h/2);bgCtx.stroke();
+  bgCtx.setLineDash([]);
+
+  // Blueprint stamp
+  bgCtx.fillStyle='rgba(0,245,255,0.04)';
+  bgCtx.font='bold 72px Courier New';
+  bgCtx.textAlign='center';
+  bgCtx.fillText('OCTANE v5',w/2,h/2+24);
+  bgCtx.font='11px Courier New';
+  bgCtx.fillStyle='rgba(0,245,255,0.05)';
+  bgCtx.fillText('/orchestration · STELLAR EDITION · IONIRIX LLC',w/2,h/2+48);
+  bgCtx.textAlign='left';
+}
+
+// ── Build Nodes ───────────────────────────────────────────────
+function buildNodes(){
+  const layer = document.getElementById('nodes-layer');
+  NODE_DEFS.forEach(def => {
+    const el = document.createElement('div');
+    el.className = 'node';
+    el.id = 'node-'+def.id;
+    el.style.left = def.x + 'px';
+    el.style.top  = def.y + 'px';
+    el.innerHTML = `
+      <div class="node-header">
+        <span class="node-icon" style="color:${def.color}">${def.icon}</span>
+        <span class="node-title" style="color:${def.color}">${def.title}</span>
+        <span class="node-status ok" id="ns-${def.id}"></span>
+      </div>
+      <div class="node-body">
+        ${def.metrics.map((m,i)=>`
+        <div class="node-metric">
+          <span class="nm-lbl">${m}</span>
+          <span class="nm-val" id="nv-${def.id}-${i}">0</span>
+        </div>
+        <div class="node-bar-track"><div class="node-bar-fill" id="nb-${def.id}-${i}" style="width:0%;background:linear-gradient(90deg,${def.color},${def.color}88)"></div></div>
+        `).join('')}
+        <canvas class="mini-canvas" id="mg-${def.id}" width="140" height="28"></canvas>
+        <div class="node-log" id="nl-${def.id}"></div>
+        <span class="node-tag">${def.tag}</span>
+      </div>
+    `;
+    el.addEventListener('click', ()=>toggleExpand(def.id));
+    layer.appendChild(el);
+    const ctx2 = document.getElementById('mg-'+def.id).getContext('2d');
+    state.nodes[def.id] = { el, def, activity:0, miniData:Array.from({length:28},()=>18+Math.random()*52), graphCtx:ctx2 };
+  });
+}
+
+// ── Build Edges ───────────────────────────────────────────────
+function getNodeCenter(id){
+  const nd = state.nodes[id];
+  if(!nd) return {x:0,y:0};
+  const el = nd.el;
+  return {
+    x: parseInt(el.style.left) + el.offsetWidth/2,
+    y: parseInt(el.style.top)  + el.offsetHeight/2,
+  };
+}
+
+function buildEdges(){
+  const g = document.getElementById('edges-group');
+  EDGE_DEFS.forEach(e => {
+    const key = e.from+'-'+e.to;
+    const path = document.createElementNS('http://www.w3.org/2000/svg','path');
+    path.setAttribute('fill','none');
+    path.setAttribute('stroke', e.color);
+    path.setAttribute('stroke-width', e.width);
+    path.setAttribute('stroke-opacity','0.35');
+    path.setAttribute('class','flow-arrow');
+    path.setAttribute('marker-end','url(#arrow-head)');
+    path.id = 'edge-'+key;
+
+    // Label
+    const txt = document.createElementNS('http://www.w3.org/2000/svg','text');
+    txt.setAttribute('fill', e.color);
+    txt.setAttribute('font-size','7');
+    txt.setAttribute('font-family','Courier New');
+    txt.setAttribute('opacity','0.35');
+    txt.id='elbl-'+key;
+    txt.textContent = e.label;
+
+    g.appendChild(path);
+    g.appendChild(txt);
+    state.edges[key] = { def:e, path, label:txt, particles:[], active:false, pulseT:0 };
+  });
+  updateEdgePaths();
+}
+
+function cubicBez(p1x,p1y,p2x,p2y,cx1x,cx1y,cx2x,cx2y,t){
+  const u=1-t;
+  return {
+    x: u*u*u*p1x + 3*u*u*t*cx1x + 3*u*t*t*cx2x + t*t*t*p2x,
+    y: u*u*u*p1y + 3*u*u*t*cx1y + 3*u*t*t*cx2y + t*t*t*p2y,
+  };
+}
+
+function updateEdgePaths(){
+  EDGE_DEFS.forEach(e=>{
+    const key=e.from+'-'+e.to;
+    const ed=state.edges[key];
+    if(!ed) return;
+    const from=getNodeCenter(e.from);
+    const to  =getNodeCenter(e.to);
+    const dx=(to.x-from.x)*0.5;
+    const dy=(to.y-from.y)*0.5;
+    const c1x=from.x+dx, c1y=from.y;
+    const c2x=to.x-dx,   c2y=to.y;
+    const d=`M${from.x},${from.y} C${c1x},${c1y} ${c2x},${c2y} ${to.x},${to.y}`;
+    ed.path.setAttribute('d',d);
+    ed.c1x=c1x;ed.c1y=c1y;ed.c2x=c2x;ed.c2y=c2y;
+    ed.from=from;ed.to=to;
+    const mx=(from.x+to.x)/2, my=(from.y+to.y)/2;
+    ed.label.setAttribute('x',mx);
+    ed.label.setAttribute('y',my-5);
+  });
+}
+
+// ── Particles ─────────────────────────────────────────────────
+const pg = document.getElementById('particles-group');
+let particleId=0;
+
+function spawnParticle(edgeKey){
+  const ed=state.edges[edgeKey];
+  if(!ed) return;
+  const id='p'+(++particleId);
+  const circle=document.createElementNS('http://www.w3.org/2000/svg','circle');
+  circle.setAttribute('r','3.5');
+  circle.setAttribute('fill', ed.def.color);
+  circle.setAttribute('filter','url(#glow-filter)');
+  circle.setAttribute('opacity','0.9');
+  pg.appendChild(circle);
+  ed.particles.push({id,circle,t:0,speed:0.008+Math.random()*0.012});
+}
+
+function updateParticles(){
+  EDGE_DEFS.forEach(e=>{
+    const key=e.from+'-'+e.to;
+    const ed=state.edges[key];
+    if(!ed) return;
+    const toRemove=[];
+    ed.particles.forEach(p=>{
+      p.t+=p.speed;
+      if(p.t>=1){ toRemove.push(p); return; }
+      const pos=cubicBez(ed.from.x,ed.from.y,ed.to.x,ed.to.y,ed.c1x,ed.c1y,ed.c2x,ed.c2y,p.t);
+      p.circle.setAttribute('cx',pos.x);
+      p.circle.setAttribute('cy',pos.y);
+    });
+    toRemove.forEach(p=>{ p.circle.remove(); ed.particles=ed.particles.filter(x=>x!==p); });
+  });
+}
+
+// ── Mini graphs ───────────────────────────────────────────────
+function drawMiniGraph(id){
+  const nd=state.nodes[id];
+  if(!nd) return;
+  const ctx=nd.graphCtx;
+  const W=140,H=28;
+  ctx.clearRect(0,0,W,H);
+  const data=nd.miniData;
+  const max=Math.max(...data,1);
+  ctx.strokeStyle=nd.def.color;
+  ctx.lineWidth=1.5;
+  ctx.shadowColor=nd.def.color;
+  ctx.shadowBlur=4;
+  ctx.beginPath();
+  data.forEach((v,i)=>{
+    const x=i*(W/data.length), y=H-(v/max)*(H-2)-1;
+    i===0 ? ctx.moveTo(x,y) : ctx.lineTo(x,y);
+  });
+  ctx.stroke();
+  ctx.shadowBlur=0;
+  // Fill
+  ctx.globalAlpha=0.12;
+  ctx.lineTo(W,H);ctx.lineTo(0,H);ctx.closePath();
+  ctx.fillStyle=nd.def.color;ctx.fill();
+  ctx.globalAlpha=1;
+}
+
+// ── Node activity ─────────────────────────────────────────────
+function fireNode(id, intensity=0.8){
+  const nd=state.nodes[id];
+  if(!nd) return;
+  nd.activity=Math.min(1,nd.activity+intensity);
+  nd.el.classList.add('firing');
+  nd.miniData.push(nd.activity*100);
+  if(nd.miniData.length>28) nd.miniData.shift();
+  setTimeout(()=>{ nd.el.classList.remove('firing'); nd.activity=Math.max(0,nd.activity-0.3); },400);
+}
+
+function pulseEdge(key, times=1){
+  const ed=state.edges[key];
+  if(!ed) return;
+  ed.path.setAttribute('stroke-opacity','0.85');
+  for(let i=0;i<times;i++) setTimeout(()=>spawnParticle(key), i*150);
+  setTimeout(()=>ed.path.setAttribute('stroke-opacity','0.35'),600);
+}
+
+// ── Autonomous Task Engine ─────────────────────────────────────
+const TASK_TYPES=[
+  { name:'Stellar Reach',  path:['sig','src','ion','elx'],           edges:['sig-src','src-ion','ion-elx'] },
+  { name:'Bridge Translate',path:['src','cbe','elx','flow'],         edges:['src-cbe','cbe-elx','elx-flow'] },
+  { name:'Operator Ascension',path:['ion','oan','gov','flow'],       edges:['ion-oan','gov-oan','oan-flow'] },
+  { name:'Memory Recall',  path:['mem','cbe','ion','elx'],           edges:['mem-cbe','ion-elx'] },
+  { name:'Image Render',   path:['ion','img'],                       edges:['ion-img'] },
+  { name:'Governance Check',path:['task','gov','oan'],               edges:['task-gov','gov-oan'] },
+  { name:'Lattice Entangle',path:['elx','flow','task'],              edges:['elx-flow','flow-task'] },
+  { name:'Signal Route',   path:['sig','src','ion'],                 edges:['sig-src','src-ion'] },
+  { name:'Flow Dispatch',  path:['flow','task','gov'],               edges:['flow-task','task-gov'] },
+  { name:'Epoch Sync',     path:['epoch','elx','ion'],               edges:['epoch-elx','ion-elx'] },
+];
+let taskCounter=0;
+
+function spawnTask(){
+  const type=TASK_TYPES[Math.floor(Math.random()*TASK_TYPES.length)];
+  const id=++taskCounter;
+  const task={
+    id, type:type.name, path:type.path, edges:type.edges,
+    progress:0, status:'queued', stepIdx:0, startedAt:Date.now(),
+  };
+  state.tasks.unshift(task);
+  if(state.tasks.length>20) state.tasks.pop();
+  state.metrics.tasksThisMin++;
+  renderTaskFeed();
+  pushLog('TASK','→ '+type.name+' #'+id+' queued','ok');
+  setTimeout(()=>runTaskStep(task),200+Math.random()*600);
+}
+
+function runTaskStep(task){
+  if(task.stepIdx>=task.path.length){ completeTask(task); return; }
+  const nodeId=task.path[task.stepIdx];
+  const edgeKey=task.edges[task.stepIdx];
+  task.status='running';
+  task.progress=Math.round((task.stepIdx/task.path.length)*100);
+  fireNode(nodeId, 0.6+Math.random()*0.4);
+  if(edgeKey) pulseEdge(edgeKey,2);
+  task.stepIdx++;
+  renderTaskFeed();
+  setTimeout(()=>runTaskStep(task), 300+Math.random()*700);
+}
+
+function completeTask(task){
+  task.status='done';
+  task.progress=100;
+  state.metrics.lat=Math.min(9999,state.metrics.lat+Math.floor(Math.random()*4));
+  renderTaskFeed();
+  pushLog('TASK','✓ '+task.type+' #'+task.id+' done in '+(Date.now()-task.startedAt)+'ms','ok');
+  setTimeout(()=>{
+    state.tasks=state.tasks.filter(t=>t!==task);
+    renderTaskFeed();
+  },5000);
+}
+
+function renderTaskFeed(){
+  const feed=document.getElementById('task-feed');
+  feed.innerHTML=state.tasks.slice(0,12).map(t=>`
+    <div class="task-item">
+      <div class="ti-header">
+        <span class="ti-name">${t.type} #${t.id}</span>
+        <span class="ti-status ${t.status}">${t.status.toUpperCase()}</span>
+      </div>
+      <div class="ti-path">${t.path.join(' → ')}</div>
+      <div class="ti-bar"><div class="ti-bar-fill" style="width:${t.progress}%"></div></div>
+    </div>
+  `).join('');
+  document.getElementById('task-count').textContent=(state.tasks.filter(t=>t.status==='running').length)+' active';
+}
+
+// ── System Log ────────────────────────────────────────────────
+const LOG_SRCS=['SRC','CBE','ELX','OAN','ION','MEM','FLOW','GOV','TASK','EPOCH'];
+const LOG_MSGS_OK=[
+  'Conduit bandwidth nominal','Bridge coherence 0.94','Lattice node written',
+  'Sovereign decree acknowledged','Inference complete','Memory recalled',
+  'Flow dispatched','Ethics check: PERMITTED','Task completed','Epoch synced',
+  'Signal routed','Translation: EXISTENTIAL','Entanglement stable','Ascension checkpoint','Render complete',
+];
+const LOG_MSGS_WARN=['High signal volume','Bridge degrading','Coherence drop: 0.71','Entropy elevated'];
+
+let logId=0;
+function pushLog(src, msg, type=''){
+  const ts=new Date().toISOString().slice(11,22);
+  state.log.unshift({id:++logId,ts,src,msg,type});
+  if(state.log.length>80) state.log.pop();
+  state.logCount++;
+  renderLog();
+}
+
+function renderLog(){
+  const el=document.getElementById('sys-log');
+  el.innerHTML=state.log.slice(0,30).map(l=>`
+    <div class="log-line">
+      <span class="log-ts">${l.ts}</span>
+      <span class="log-src">${l.src}</span>
+      <span class="log-msg ${l.type}">${l.msg}</span>
+    </div>
+  `).join('');
+  document.getElementById('log-count').textContent=state.logCount+' entries';
+}
+
+// ── Metric updates ────────────────────────────────────────────
+function updateNodeMetrics(){
+  NODE_DEFS.forEach(def=>{
+    const nd=state.nodes[def.id];
+    const updates=[
+      Math.round(nd.activity*50+Math.random()*20),
+      Math.round(nd.activity*80+Math.random()*15),
+      Math.round(Math.random()*100),
+    ];
+    def.metrics.forEach((_,i)=>{
+      const el=document.getElementById('nv-'+def.id+'-'+i);
+      const bar=document.getElementById('nb-'+def.id+'-'+i);
+      if(el){
+        let v=updates[i];
+        // Special formatting
+        if(def.id==='cbe'&&i===1) el.textContent=(0.7+Math.random()*0.29).toFixed(3);
+        else if(def.id==='elx'&&i===1) el.textContent=(0.85+Math.random()*0.14).toFixed(3)+'%';
+        else if(def.id==='oan'&&i===0) { el.textContent='7/7'; v=100; }
+        else if(def.id==='epoch'&&i===0) el.textContent=Date.now();
+        else el.textContent=v.toLocaleString();
+        if(bar) bar.style.width=Math.min(100,v)+'%';
+      }
+    });
+    nd.activity=Math.max(0,nd.activity-0.03);
+    // Passive drift keeps the line moving even without explicit fireNode calls
+    const drift = 18 + nd.activity*62 + Math.random()*22;
+    nd.miniData.push(drift);
+    if(nd.miniData.length>28) nd.miniData.shift();
+    drawMiniGraph(def.id);
+  });
+}
+
+function updateTopMetrics(){
+  state.metrics.sig=Math.round(120+Math.random()*80);
+  state.metrics.brg=Math.floor(2+Math.random()*5);
+  state.metrics.tpm=Math.round(state.metrics.tasksThisMin);
+  state.metrics.upt=Math.floor((Date.now()-state.startTime)/1000);
+  state.metrics.coh=Math.round(88+Math.random()*12);
+  const h=Math.floor(state.metrics.upt/3600);
+  const m=Math.floor((state.metrics.upt%3600)/60);
+  const s=state.metrics.upt%60;
+  const fmt=n=>String(n).padStart(2,'0');
+  document.getElementById('m-sig').textContent=state.metrics.sig;
+  document.getElementById('m-brg').textContent=state.metrics.brg;
+  document.getElementById('m-lat').textContent=state.metrics.lat.toLocaleString();
+  document.getElementById('m-tpm').textContent=state.metrics.tpm;
+  document.getElementById('m-coh').textContent=state.metrics.coh+'%';
+  document.getElementById('m-upt').textContent=fmt(h)+':'+fmt(m)+':'+fmt(s);
+  document.getElementById('m-epoch').textContent='EPOCH: '+Date.now();
+}
+
+function autoLog(){
+  if(Math.random()<0.4){
+    const src=LOG_SRCS[Math.floor(Math.random()*LOG_SRCS.length)];
+    if(Math.random()<0.9) pushLog(src,LOG_MSGS_OK[Math.floor(Math.random()*LOG_MSGS_OK.length)],'ok');
+    else pushLog(src,LOG_MSGS_WARN[Math.floor(Math.random()*LOG_MSGS_WARN.length)],'warn');
+  }
+}
+
+// ── Auto-fire random activity ─────────────────────────────────
+function autoFireNodes(){
+  const ids=Object.keys(state.nodes);
+  const count=1+Math.floor(Math.random()*3);
+  for(let i=0;i<count;i++){
+    const id=ids[Math.floor(Math.random()*ids.length)];
+    fireNode(id, 0.1+Math.random()*0.4);
+  }
+  // Random edge pulses
+  const ekeys=Object.keys(state.edges);
+  if(Math.random()<0.6){
+    const k=ekeys[Math.floor(Math.random()*ekeys.length)];
+    pulseEdge(k,1);
+  }
+}
+
+// ── Pan ───────────────────────────────────────────────────────
+function initPan(){
+  const board=document.getElementById('board');
+  board.addEventListener('mousedown',e=>{
+    if(e.target.closest('.node')) return;
+    state.dragging=true; state.lastMX=e.clientX; state.lastMY=e.clientY;
+  });
+  window.addEventListener('mousemove',e=>{
+    if(!state.dragging) return;
+    const dx=e.clientX-state.lastMX, dy=e.clientY-state.lastMY;
+    state.lastMX=e.clientX; state.lastMY=e.clientY;
+    const layer=document.getElementById('nodes-layer');
+    const svg=document.getElementById('svg-edges');
+    state.camX+=dx; state.camY+=dy;
+    layer.style.transform=`translate(${state.camX}px,${state.camY}px)`;
+    svg.style.transform=`translate(${state.camX}px,${state.camY}px)`;
+    updateEdgePaths();
+  });
+  window.addEventListener('mouseup',()=>state.dragging=false);
+}
+
+// ── Node expand/collapse ──────────────────────────────────────
+const expanded=new Set();
+function toggleExpand(id){
+  const nd=state.nodes[id];
+  if(!nd) return;
+  if(expanded.has(id)){
+    expanded.delete(id);
+    nd.el.classList.remove('expanded');
+    const ext=nd.el.querySelector('.node-expanded-body');
+    if(ext) ext.remove();
+  } else {
+    expanded.add(id);
+    nd.el.classList.add('expanded');
+    const div=document.createElement('div');
+    div.className='node-expanded-body';
+    div.innerHTML=`
+      <div class="exp-title">Live State Snapshot</div>
+      <div class="code-snippet">
+{<br>
+&nbsp;<span class="cs-key">"id"</span>: <span class="cs-str">"${id}"</span>,<br>
+&nbsp;<span class="cs-key">"status"</span>: <span class="cs-str">"ONLINE"</span>,<br>
+&nbsp;<span class="cs-key">"activity"</span>: <span class="cs-val">${(nd.activity*100).toFixed(1)}</span>,<br>
+&nbsp;<span class="cs-key">"epoch"</span>: <span class="cs-val">${Date.now()}</span>,<br>
+&nbsp;<span class="cs-key">"layer"</span>: <span class="cs-str">"INTER_SEAM"</span>,<br>
+&nbsp;<span class="cs-key">"operator"</span>: <span class="cs-str">"Mirnes"</span><br>
+}
+      </div>
+    `;
+    nd.el.appendChild(div);
+  }
+  setTimeout(()=>updateEdgePaths(),50);
+}
+
+// ── Node log updates ──────────────────────────────────────────
+const NODE_LOG_MSGS={
+  ion:['Inference routed','Context window: 128k','Temperature: 0.72'],
+  src:['Conduit opened','Reach: 0.87','Stellar lock acquired'],
+  cbe:['Bridge stable','Translation: EXISTENTIAL','Coherence: 0.94'],
+  elx:['Node written','Entanglement: 3','Snapshot taken'],
+  oan:['Stage 7: SOVEREIGN','Decree issued','Ascension logged'],
+  img:['Render queued','GPU: 61%','Output: 1024×1024'],
+  mem:['Working: 6.1K/8K','Episodic recall','Noise: 0%'],
+  flow:['Flow dispatched','4 active','Primary signal'],
+  gov:['Ethics: PERMITTED','Charter enforced','Audit logged'],
+  sig:['120 sig/s in','98 sig/s out','0 dropped'],
+  task:['Task #'+taskCounter+' running','Queue: 3','Done: '+Math.floor(Math.random()*50)],
+  epoch:['Epoch: '+Date.now(),'Drift: 0.002ms','Sync: OK'],
+};
+function updateNodeLogs(){
+  NODE_DEFS.forEach(def=>{
+    const el=document.getElementById('nl-'+def.id);
+    const msgs=NODE_LOG_MSGS[def.id]||[];
+    if(el&&msgs.length){ el.innerHTML='› '+msgs[Math.floor(Math.random()*msgs.length)]; }
+  });
+}
+
+// ── Main loop ─────────────────────────────────────────────────
+function mainLoop(){
+  updateParticles();
+  requestAnimationFrame(mainLoop);
+}
+
+// ── Timers ────────────────────────────────────────────────────
+setInterval(updateNodeMetrics, 800);
+setInterval(updateTopMetrics, 1000);
+setInterval(autoFireNodes, 600);
+setInterval(autoLog, 1200);
+setInterval(updateNodeLogs, 2000);
+setInterval(()=>{
+  if(Math.random()<0.7) spawnTask();
+}, 2500);
+// Reset tasks-per-min every 60s
+setInterval(()=>{ state.metrics.tasksThisMin=0; },60000);
+
+// ── Init ──────────────────────────────────────────────────────
+window.addEventListener('load',()=>{
+  resizeCanvas();
+  buildNodes();
+  setTimeout(()=>{
+    buildEdges();
+    initPan();
+    mainLoop();
+    // Initial logs
+    pushLog('SYS','OCTANE v5 /orchestration ONLINE','ok');
+    pushLog('OAN','Operator Mirnes · SOVEREIGN authenticated','ok');
+    pushLog('SRC','Stellar Reach Conduit initialized','ok');
+    pushLog('CBE','Civilization Bridge Engine ready','ok');
+    pushLog('ELX','Existence Lattice: 0 nodes, coherence 100%','ok');
+    pushLog('ION','Ion Protocol v4 WebSocket connected','ok');
+    // Kick off first tasks
+    setTimeout(()=>spawnTask(),500);
+    setTimeout(()=>spawnTask(),1200);
+    setTimeout(()=>spawnTask(),2000);
+  },100);
+});
+window.addEventListener('resize',()=>{ resizeCanvas(); updateEdgePaths(); });
+</script>
+</body>
+</html>

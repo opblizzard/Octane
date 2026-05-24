@@ -1,0 +1,66 @@
+{
+  "name": "octane-v5",
+  "version": "5.0.0",
+  "description": "Octane v5 — The Inter-Existential Engine | STELLAR Edition | Ionirix LLC",
+  "main": "src/index.ts",
+  "scripts": {
+    "dev": "wrangler dev",
+    "dev:ui": "vite",
+    "deploy": "wrangler deploy",
+    "build": "vite build && tsc --noEmit",
+    "build:worker": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint src --ext .ts",
+    "format": "prettier --write \"src/**/*.ts\" \"ui/**/*.{html,css,js}\"",
+    "db:migrate": "wrangler d1 migrations apply octane-v5-db",
+    "db:seed": "wrangler d1 execute octane-v5-db --file=src/db/seed.sql",
+    "type-check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "clsx": "^2.1.1",
+    "hono": "^4.4.0",
+    "lucide-react": "^0.390.0",
+    "nanoid": "^5.0.0",
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0",
+    "react-markdown": "^10.1.0",
+    "react-router-dom": "^7.15.1",
+    "recharts": "^3.8.1",
+    "remark-gfm": "^4.0.1",
+    "zod": "^3.23.0",
+    "zustand": "^4.5.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20240524.0",
+    "@types/node": "^20.14.0",
+    "@types/react": "^18.3.0",
+    "@types/react-dom": "^18.3.0",
+    "@typescript-eslint/eslint-plugin": "^8.33.0",
+    "@typescript-eslint/parser": "^8.33.0",
+    "@vitejs/plugin-react": "^4.3.0",
+    "autoprefixer": "^10.4.0",
+    "eslint": "^9.3.0",
+    "postcss": "^8.4.0",
+    "prettier": "^3.3.0",
+    "tailwindcss": "^3.4.0",
+    "typescript": "^5.4.5",
+    "vite": "^5.3.0",
+    "vitest": "^1.6.0",
+    "wrangler": "^4.94.0"
+  },
+  "keywords": [
+    "octane-v5",
+    "inter-existential",
+    "stellar",
+    "ionirix",
+    "sovereign-ai",
+    "cloudflare-workers"
+  ],
+  "author": "Ionirix LLC — Mirnes Kudić, Sovereign Architect",
+  "license": "UNLICENSED",
+  "private": true,
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
