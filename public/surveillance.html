@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1.0" />
+  <meta name="color-scheme" content="dark" />
+  <title>Octane v6 Surveillance</title>
+  <style>
+    :root {
+      --bg: #050a12;
+      --panel: rgba(9, 15, 28, 0.94);
+      --panel-2: rgba(13, 21, 38, 0.92);
+      --border: rgba(0, 200, 255, 0.14);
+      --text: #e8edf5;
+      --muted: #7d8fae;
+      --accent: #00f5ff;
+      --stellar: #00ffaa;
+      --warn: #f59e0b;
+      --danger: #ef4444;
+      --accent-2: #7b61ff;
+      font-family: Inter, system-ui, -apple-system, Segoe UI, sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--text);
+      background:
+        radial-gradient(circle at top, rgba(0, 245, 255, 0.16), transparent 32%),
+        linear-gradient(180deg, #060b14 0%, #050a12 100%);
+    }
+
+    .shell { min-height: 100vh; padding: 24px; display: grid; gap: 16px; }
+    .hero, .panel, .metric {
+      border: 1px solid var(--border);
+      background: var(--panel);
+      box-shadow: 0 30px 80px rgba(0,0,0,0.35);
+      border-radius: 22px;
+      overflow: hidden;
+    }
+
+    .hero { padding: 24px; position: relative; }
+    .hero::before {
+      content: '';
+      position: absolute; inset: 0;
+      background:
+        radial-gradient(circle at top right, rgba(0,245,255,0.11), transparent 34%),
+        radial-gradient(circle at bottom left, rgba(123,97,255,0.13), transparent 42%);
+      pointer-events: none;
+    }
+
+    .kicker { font-size: 11px; letter-spacing: .24em; color: var(--accent); text-transform: uppercase; }
+    h1 { margin: 10px 0 8px; font-size: clamp(32px, 4vw, 60px); line-height: 1; }
+    p { color: var(--muted); line-height: 1.6; }
+    .controls { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 16px; }
+    .badge, .button { display: inline-flex; align-items: center; gap: 8px; border-radius: 999px; border: 1px solid var(--border); padding: 8px 12px; text-transform: uppercase; letter-spacing: .16em; font-size: 10px; color: var(--text); }
+    .button { background: rgba(13,21,38,.9); text-decoration: none; }
+    .button.primary { border-color: rgba(0,245,255,.35); color: var(--accent); }
+    .signature { font-size: 10px; letter-spacing: .18em; text-transform: uppercase; color: var(--muted); margin-top: 12px; }
+
+    .metrics { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 14px; }
+    .metric { padding: 14px; background: var(--panel-2); }
+    .metric .label { font-size: 10px; letter-spacing: .2em; text-transform: uppercase; color: var(--muted); }
+    .metric .value { margin-top: 6px; font-size: 30px; font-weight: 800; color: var(--accent); }
+
+    .layout { display: grid; grid-template-columns: minmax(0,1.45fr) minmax(320px,.85fr); gap: 16px; }
+    .maps { display: grid; gap: 16px; }
+    .map-card, .side-card { border: 1px solid var(--border); border-radius: 20px; background: linear-gradient(180deg, rgba(5,10,18,.96), rgba(3,7,12,.98)); overflow: hidden; }
+    .map-card { position: relative; height: 420px; }
+    .map-card.wireframe { background: #191919; height: 560px; }
+    .map-title { position: absolute; left: 16px; top: 16px; z-index: 3; font-size: 11px; letter-spacing: .18em; text-transform: uppercase; color: var(--accent); }
+    .grid-overlay { position: absolute; inset: 0; background-image: linear-gradient(to right, rgba(104,196,255,.08) 1px, transparent 1px), linear-gradient(to bottom, rgba(104,196,255,.08) 1px, transparent 1px); background-size: 64px 64px; opacity: .55; }
+    .grid-overlay.world { background-size: 36px 36px; opacity: .8; }
+
+    .globe-wrap { position: absolute; inset: 24px; display: flex; align-items: center; justify-content: center; }
+    .globe {
+      position: relative; width: 86%; height: 86%; border-radius: 50%; overflow: hidden;
+      background: radial-gradient(circle at 42% 38%, rgba(255,255,255,0.18), rgba(27,27,27,0.1) 42%, rgba(17,17,17,0) 66%);
+      border: 1px solid rgba(255,255,255,0.4);
+      box-shadow: inset 0 0 40px rgba(255,255,255,0.08), 0 0 100px rgba(0,0,0,.38);
+    }
+    .globe svg, .flat-map svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+    .globe-note, .flat-note { position: absolute; inset: auto 16px 16px 16px; border: 1px solid rgba(255,255,255,.12); border-radius: 14px; background: rgba(0,0,0,.25); padding: 10px 12px; font-size: 10px; letter-spacing: .18em; text-transform: uppercase; color: rgba(255,255,255,.72); backdrop-filter: blur(8px); z-index: 2; }
+
+    .flat-map { position: relative; height: 420px; overflow: hidden; }
+    .flat-map::before {
+      content: ''; position: absolute; inset: 0;
+      background: radial-gradient(circle at 50% 20%, rgba(127,205,255,0.22), transparent 42%), linear-gradient(180deg, rgba(7,25,48,0.98), rgba(6,18,34,0.98));
+    }
+    .flat-map svg path.continent { fill: rgba(112, 176, 201, .52); stroke: rgba(183, 224, 242, .32); stroke-width: .25; }
+    .flat-map svg path.network { stroke: rgba(207,240,255,0.28); stroke-width: .25; fill: none; }
+    .map-dot, .world-dot { position: absolute; border-radius: 999px; }
+    .map-dot { background: rgba(255,255,255,.92); box-shadow: 0 0 8px rgba(180,240,255,.85); }
+    .world-dot { background: rgba(255,255,255,.95); box-shadow: 0 0 12px rgba(180,240,255,.85); }
+    .alert-badge { position: absolute; transform: translate(-50%, -50%); border: 1px solid rgba(255,255,255,.22); background: rgba(255,255,255,.12); color: rgba(255,255,255,.96); padding: 4px 8px; border-radius: 999px; font-size: 9px; letter-spacing: .14em; text-transform: uppercase; }
+
+    .right-stack { display: grid; gap: 16px; }
+    .list { display: flex; flex-direction: column; gap: 10px; max-height: 300px; overflow: auto; padding-right: 2px; }
+    .item { border: 1px solid var(--border); border-radius: 14px; background: rgba(13,21,38,.9); padding: 12px; }
+    .title { font-weight: 700; color: var(--text); }
+    .meta { font-size: 12px; color: var(--muted); margin-top: 4px; line-height: 1.55; }
+    .footer-note { color: var(--muted); font-size: 12px; line-height: 1.6; }
+
+    .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .pad { padding: 16px; }
+
+    @media (max-width: 1100px) {
+      .metrics, .layout, .two-col { grid-template-columns: 1fr; }
+      .map-card, .flat-map { height: 380px; }
+      .map-card.wireframe { height: 420px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <section class="hero">
+      <div class="kicker">SENTINEL / SURVEILLANCE</div>
+      <h1>Octane v6 Global Surveillance</h1>
+      <p>Standalone HTML download for the command page. The visuals mirror the new globe treatment and flat Earth map, with live surveillance data layered on top.</p>
+      <div class="controls">
+        <a class="button primary" href="/surveillance">Open command page</a>
+        <a class="button" href="/surveillance.html" download>Download HTML</a>
+        <span class="badge">2D Earth</span>
+        <span class="badge">3D Globe</span>
+        <span class="badge">Live telemetry</span>
+      </div>
+      <div class="signature" id="signature">Operator Signature: Mirnes / Generating briefing...</div>
+    </section>
+
+    <div class="metrics">
+      <div class="metric"><div class="label">Total Nodes</div><div class="value" id="totalNodes">14</div></div>
+      <div class="metric"><div class="label">Active Alerts</div><div class="value" id="activeAlerts">3</div></div>
+      <div class="metric"><div class="label">Global Latency</div><div class="value" id="globalLatency">62</div></div>
+      <div class="metric"><div class="label">Requests / Min</div><div class="value" id="rpm">534531</div></div>
+    </div>
+
+    <div class="layout">
+      <div class="maps">
+        <div class="map-card wireframe">
+          <div class="map-title">3D Globe Transit / Country Presence</div>
+          <div class="grid-overlay"></div>
+          <div class="globe-wrap">
+            <div class="globe">
+              <svg viewBox="0 0 100 100" preserveAspectRatio="none">
+                <defs>
+                  <radialGradient id="globeShade" cx="42%" cy="34%" r="70%">
+                    <stop offset="0%" stop-color="rgba(255,255,255,0.18)" />
+                    <stop offset="45%" stop-color="rgba(255,255,255,0.06)" />
+                    <stop offset="100%" stop-color="rgba(255,255,255,0)" />
+                  </radialGradient>
+                </defs>
+                <ellipse cx="50" cy="48" rx="42" ry="42" fill="rgba(255,255,255,0.01)" stroke="rgba(255,255,255,0.55)" stroke-width="0.45" />
+                <path d="M 10 50 C 18 34, 34 25, 45 31 C 56 37, 59 49, 56 59 C 53 72, 44 76, 33 72 C 23 68, 15 60, 10 50 Z" fill="rgba(244,244,244,0.72)" stroke="rgba(255,255,255,0.8)" stroke-width="0.25" />
+                <path d="M 30 62 C 37 52, 44 45, 53 44 C 60 43, 67 48, 68 55 C 69 63, 65 69, 58 72 C 51 75, 43 74, 36 70 C 31 67, 29 65, 30 62 Z" fill="rgba(244,244,244,0.68)" stroke="rgba(255,255,255,0.78)" stroke-width="0.24" />
+                <path d="M 70 24 C 76 28, 80 34, 81 40 C 81 47, 78 53, 73 57 C 69 60, 64 62, 61 61 C 58 59, 58 55, 59 51 C 61 42, 64 31, 70 24 Z" fill="rgba(244,244,244,0.64)" stroke="rgba(255,255,255,0.78)" stroke-width="0.24" />
+                <path d="M 14 69 C 19 71, 24 73, 30 76 C 35 79, 40 80, 43 79 C 38 76, 32 72, 26 69 C 21 67, 17 67, 14 69 Z" fill="rgba(244,244,244,0.5)" stroke="rgba(255,255,255,0.75)" stroke-width="0.18" />
+                <path d="M 29 83 C 36 86, 44 88, 53 88 C 61 88, 69 86, 75 83 C 68 80, 60 79, 52 79 C 43 79, 35 80, 29 83 Z" fill="rgba(244,244,244,0.48)" stroke="rgba(255,255,255,0.75)" stroke-width="0.18" />
+                <path d="M 76 76 C 81 77, 85 79, 88 83 C 90 86, 91 88, 90 90 C 85 88, 81 85, 77 82 C 75 80, 74 78, 76 76 Z" fill="rgba(244,244,244,0.44)" stroke="rgba(255,255,255,0.74)" stroke-width="0.18" />
+                <rect x="0" y="0" width="100" height="100" fill="url(#globeShade)" />
+              </svg>
+            </div>
+          </div>
+          <div class="globe-note">Wireframe globe with country-level server presence and street-level zoom hints.</div>
+        </div>
+
+        <div class="map-card">
+          <div class="map-title">2D Earth Transit / Street Detail</div>
+          <div class="grid-overlay world"></div>
+          <div class="flat-map">
+            <svg viewBox="0 0 100 100" preserveAspectRatio="none">
+              <path class="continent" d="M 2 37 C 7 31, 14 27, 22 27 C 28 27, 33 28, 37 31 C 41 34, 43 39, 41 44 C 39 49, 35 51, 29 52 C 23 53, 17 54, 12 58 C 7 61, 4 65, 2 71 Z" />
+              <path class="continent" d="M 20 22 C 27 20, 34 18, 42 19 C 48 20, 53 23, 56 28 C 58 33, 57 38, 53 42 C 49 45, 44 46, 38 44 C 31 42, 25 38, 20 32 Z" />
+              <path class="continent" d="M 42 27 C 49 24, 58 23, 66 24 C 74 25, 81 29, 85 35 C 88 41, 87 47, 83 51 C 79 55, 73 57, 66 56 C 59 55, 52 51, 46 46 C 41 42, 39 33, 42 27 Z" />
+              <path class="continent" d="M 18 53 C 24 50, 31 49, 39 49 C 46 49, 52 52, 57 56 C 61 60, 60 66, 56 69 C 52 72, 46 73, 39 72 C 32 71, 25 68, 19 64 C 16 61, 15 57, 18 53 Z" />
+              <path class="continent" d="M 38 62 C 46 58, 55 56, 64 56 C 73 56, 80 59, 85 63 C 90 68, 89 74, 84 78 C 79 82, 71 84, 63 84 C 55 84, 47 82, 41 78 C 37 74, 35 68, 38 62 Z" />
+              <path class="continent" d="M 75 17 C 80 15, 86 15, 90 18 C 93 21, 95 25, 94 29 C 93 33, 90 36, 86 37 C 81 38, 76 37, 73 34 C 71 31, 71 27, 72 23 C 73 20, 74 18, 75 17 Z" />
+              <path class="continent" d="M 84 63 C 88 61, 93 61, 97 63 C 97 67, 96 71, 93 74 C 89 77, 84 78, 80 77 C 78 74, 78 70, 80 66 C 81 64, 82 63, 84 63 Z" />
+              <path class="continent" d="M 9 67 C 13 65, 18 65, 22 67 C 23 70, 22 74, 19 76 C 15 79, 10 79, 6 77 C 5 74, 5 70, 7 68 C 8 67, 8 67, 9 67 Z" />
+            </svg>
+            <div class="flat-note">Full-earth transit map with weather, closures, and street-scale detail.</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="right-stack">
+        <div class="side-card pad">
+          <div class="badge" style="margin-bottom:12px;">Live closures & transit feed</div>
+          <div class="list" id="feed"></div>
+        </div>
+
+        <div class="side-card pad">
+          <div class="badge">Country presence</div>
+          <div class="list" id="countries" style="max-height:260px; margin-top:12px;"></div>
+        </div>
+
+        <div class="side-card pad">
+          <div class="badge">Operational notes</div>
+          <p id="note" style="margin-top:12px;">Two planetary map models, live closures, transit disruptions, and country-level server presence.</p>
+          <div class="footer-note" style="margin-top:8px;">If the API is reachable, this page refreshes itself with live surveillance data. Otherwise it falls back to the bundled command snapshot.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const fallbackNodes = [
+      { country: 'United States', name: 'US-EAST-1', region: 'Virginia, USA', status: 'NOMINAL', latencyMs: 8, requestsPerMin: 43120 },
+      { country: 'United States', name: 'US-WEST-1', region: 'California, USA', status: 'NOMINAL', latencyMs: 12, requestsPerMin: 35240 },
+      { country: 'Ireland', name: 'EU-WEST-1', region: 'Dublin, Ireland', status: 'NOMINAL', latencyMs: 22, requestsPerMin: 40870 },
+      { country: 'Germany', name: 'EU-CENTRAL', region: 'Frankfurt, Germany', status: 'NOMINAL', latencyMs: 19, requestsPerMin: 31800 },
+      { country: 'Japan', name: 'AP-EAST-1', region: 'Tokyo, Japan', status: 'NOMINAL', latencyMs: 88, requestsPerMin: 28800 },
+      { country: 'Singapore', name: 'AP-SOUTH-1', region: 'Singapore', status: 'NOMINAL', latencyMs: 95, requestsPerMin: 27440 },
+      { country: 'Australia', name: 'AP-AUS-1', region: 'Sydney, Australia', status: 'DEGRADED', latencyMs: 142, requestsPerMin: 16420 },
+      { country: 'Brazil', name: 'SA-EAST-1', region: 'Sao Paulo, Brazil', status: 'NOMINAL', latencyMs: 110, requestsPerMin: 18350 },
+      { country: 'South Africa', name: 'AF-SOUTH-1', region: 'Johannesburg, SA', status: 'NOMINAL', latencyMs: 180, requestsPerMin: 12730 },
+      { country: 'Bahrain', name: 'ME-SOUTH-1', region: 'Manama, Bahrain', status: 'NOMINAL', latencyMs: 55, requestsPerMin: 22690 },
+      { country: 'Canada', name: 'CA-CENTRAL', region: 'Toronto, Canada', status: 'NOMINAL', latencyMs: 14, requestsPerMin: 15960 },
+      { country: 'Sweden', name: 'EU-NORTH-1', region: 'Stockholm, Sweden', status: 'NOMINAL', latencyMs: 28, requestsPerMin: 14150 },
+      { country: 'India', name: 'AP-INDIA-1', region: 'Mumbai, India', status: 'NOMINAL', latencyMs: 78, requestsPerMin: 36120 },
+      { country: 'United Kingdom', name: 'UK-SOUTH-1', region: 'London, UK', status: 'NOMINAL', latencyMs: 16, requestsPerMin: 19740 },
+    ];
+
+    const fallbackAlerts = [
+      { type: 'TRAFFIC', severity: 'WARNING', title: 'London arterial slowdown', description: 'Transit and road feeds indicate elevated congestion.', id: 'a1', resolved: false },
+      { type: 'WEATHER', severity: 'CRITICAL', title: 'Tokyo weather closure', description: 'Rain closure warnings affecting downtown routes.', id: 'a2', resolved: false },
+      { type: 'CLOSURE', severity: 'INFO', title: 'Sydney harbor lane closure', description: 'Temporary detours and closure windows are active.', id: 'a3', resolved: false },
+    ];
+
+    const countryCenters = {
+      'United States': { lat: 39.8283, lng: -98.5795 },
+      Ireland: { lat: 53.1424, lng: -7.6921 },
+      Germany: { lat: 51.1657, lng: 10.4515 },
+      Japan: { lat: 36.2048, lng: 138.2529 },
+      Singapore: { lat: 1.3521, lng: 103.8198 },
+      Australia: { lat: -25.2744, lng: 133.7751 },
+      Brazil: { lat: -14.235, lng: -51.9253 },
+      'South Africa': { lat: -30.5595, lng: 22.9375 },
+      Bahrain: { lat: 26.0667, lng: 50.5577 },
+      Canada: { lat: 56.1304, lng: -106.3468 },
+      Sweden: { lat: 60.1282, lng: 18.6435 },
+      India: { lat: 20.5937, lng: 78.9629 },
+      'United Kingdom': { lat: 55.3781, lng: -3.436 },
+    };
+
+    const escape = (value) => String(value).replace(/[&<>"]+/g, (ch) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[ch] || ch));
+    const latLngToSvg = (lat, lng) => ({ x: ((lng + 180) / 360) * 100, y: ((90 - lat) / 180) * 100 });
+
+    function render(nodes, alerts) {
+      document.getElementById('feed').innerHTML = alerts.map(alert => `
+        <div class="item">
+          <div class="title">${escape(alert.title)}</div>
+          <div class="meta">${escape(alert.type)} · ${escape(alert.severity)} · ${escape(alert.description)}</div>
+        </div>
+      `).join('');
+
+      document.getElementById('countries').innerHTML = nodes.map(node => `
+        <div class="item">
+          <div class="title">${escape(node.country)}</div>
+          <div class="meta">${escape(node.name)} · ${escape(node.region)} · ${escape(node.status)} · ${escape(node.latencyMs)}ms</div>
+        </div>
+      `).join('');
+
+      document.getElementById('totalNodes').textContent = nodes.length;
+      document.getElementById('activeAlerts').textContent = alerts.length;
+      document.getElementById('globalLatency').textContent = Math.round(nodes.reduce((sum, node) => sum + node.latencyMs, 0) / nodes.length);
+      document.getElementById('rpm').textContent = nodes.reduce((sum, node) => sum + (node.requestsPerMin || 0), 0) || 534531;
+      document.getElementById('note').textContent = `Updated ${new Date().toLocaleTimeString('en', { hour12: false })}. Earth-scale transit, street detail, and country-level server markers stay in sync.`;
+      document.getElementById('signature').textContent = `Operator Signature: Mirnes / ${new Date().toISOString()}`;
+
+      placeMarkers(nodes, alerts);
+    }
+
+    async function refresh() {
+      try {
+        const [nodesRes, alertsRes] = await Promise.all([
+          fetch('/api/v6/surveillance/nodes'),
+          fetch('/api/v6/surveillance/alerts')
+        ]);
+        const nodes = (await nodesRes.json()).data || fallbackNodes;
+        const alerts = ((await alertsRes.json()).data || []).filter((alert) => !alert.resolved);
+        render(nodes, alerts.length ? alerts : fallbackAlerts);
+      } catch (error) {
+        render(fallbackNodes, fallbackAlerts);
+      }
+    }
+
+    function placeMarkers(nodes, alerts) {
+      const globe = document.querySelector('.globe');
+      const flatMap = document.querySelector('.flat-map');
+      document.querySelectorAll('.world-dot, .map-dot, .alert-badge').forEach((el) => el.remove());
+
+      nodes.forEach((node) => {
+        const center = countryCenters[node.country] || { lat: 0, lng: 0 };
+        const globePoint = latLngToSvg(center.lat, center.lng);
+        const flatPoint = latLngToSvg(center.lat, center.lng);
+
+        const globeDot = document.createElement('div');
+        globeDot.className = 'world-dot';
+        globeDot.style.left = `${globePoint.x}%`;
+        globeDot.style.top = `${globePoint.y}%`;
+        globeDot.style.width = '8px';
+        globeDot.style.height = '8px';
+        globeDot.style.position = 'absolute';
+        globeDot.style.zIndex = '2';
+        globe.appendChild(globeDot);
+
+        const mapDot = document.createElement('div');
+        mapDot.className = 'map-dot';
+        mapDot.style.left = `${flatPoint.x}%`;
+        mapDot.style.top = `${flatPoint.y}%`;
+        mapDot.style.width = '8px';
+        mapDot.style.height = '8px';
+        mapDot.style.zIndex = '2';
+        flatMap.appendChild(mapDot);
+      });
+
+      alerts.forEach((alert, index) => {
+        const node = nodes[index % nodes.length];
+        const center = countryCenters[node.country] || { lat: 0, lng: 0 };
+        const point = latLngToSvg(center.lat, center.lng);
+        const badge = document.createElement('div');
+        badge.className = 'alert-badge';
+        badge.textContent = alert.type;
+        badge.style.left = `${point.x}%`;
+        badge.style.top = `${point.y}%`;
+        badge.style.zIndex = '3';
+        flatMap.appendChild(badge);
+      });
+    }
+
+    refresh();
+    placeMarkers(fallbackNodes, fallbackAlerts);
+    setInterval(refresh, 30000);
+  </script>
+</body>
+</html>

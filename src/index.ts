@@ -14,6 +14,7 @@ export { CivilizationBridgeEngineDO } from './workers/civilization-bridge-engine
 export { ExistenceLatticeDO }      from './workers/existence-lattice-do.js';
 export { OperatorAscensionNodeDO } from './workers/operator-ascension-node-do.js';
 export { OrchestrationFeedDO }     from './workers/orchestration-feed-do.js';
+export { SurveillanceDO }          from './workers/surveillance-do.js';
 
 const app = createRouter();
 
@@ -41,6 +42,10 @@ function isStaticAssetPath(pathname: string): boolean {
   return !API_ROUTE_PREFIXES.some((prefix) => (
     pathname === prefix || pathname.startsWith(prefix)
   ));
+}
+
+function hasFileExtension(pathname: string): boolean {
+  return /\.[a-z0-9]+$/i.test(pathname);
 }
 
 function json(data: unknown, status = 200): Response {
@@ -212,6 +217,21 @@ export default {
       return Response.redirect(new URL('/orchestration', request.url), 302)
     }
 
+    if (pathname === '/surveillance.html') {
+      return Response.redirect(new URL('/surveillance', request.url), 302)
+    }
+
+    if (pathname === '/surveillance' && request.method === 'GET') {
+      const response = await env.ASSETS.fetch(new Request(new URL('/', request.url).toString(), request));
+      const headers = new Headers(response.headers);
+      Object.entries(NO_CACHE_HEADERS).forEach(([key, value]) => headers.set(key, value));
+      return new Response(response.body, {
+        status: response.status,
+        statusText: response.statusText,
+        headers,
+      });
+    }
+
     if (pathname === '/api/ai' && request.method === 'POST') {
       return handleAIInference(request, env);
     }
@@ -234,8 +254,13 @@ export default {
     }
 
     if (isStaticAssetPath(pathname)) {
-      const response = await env.ASSETS.fetch(request);
-      if (pathname === '/' || pathname === '/orchestration') {
+      const shouldServeSpaShell = request.method === 'GET' && !hasFileExtension(pathname);
+      const assetRequest = shouldServeSpaShell
+        ? new Request(new URL('/', request.url).toString(), request)
+        : request;
+
+      const response = await env.ASSETS.fetch(assetRequest);
+      if (shouldServeSpaShell || pathname === '/orchestration') {
         const headers = new Headers(response.headers);
         Object.entries(NO_CACHE_HEADERS).forEach(([key, value]) => headers.set(key, value));
         return new Response(response.body, {

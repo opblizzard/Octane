@@ -1,0 +1,885 @@
+import L, { type CircleMarker, type Map as LeafletMap, type Polyline } from 'leaflet'
+import type { VisualizationAlert, VisualizationConfig, VisualizationNode } from './types'
+
+type MapController = {
+  setData: (nodes: VisualizationNode[], alerts: VisualizationAlert[], focusedNodeId?: string) => void
+  setAltitude: (altitude: number) => void
+  setAudioReactive: (enabled: boolean, level?: number, bands?: AudioReactiveBands) => void
+  destroy: () => void
+}
+
+type LatLng = [number, number]
+
+type AudioReactiveBands = {
+  bass: number
+  mid: number
+  treble: number
+  pulse: number
+  beat: number
+}
+
+type ReactiveBurst = {
+  line: Polyline
+  startDot: CircleMarker
+  endDot: CircleMarker
+  createdAt: number
+  ttl: number
+}
+
+type WireAudioProfile = {
+  line: Polyline
+  baseOpacity: number
+  baseWeight: number
+  intensity: number
+  phase: number
+}
+
+type RingAudioProfile = {
+  ring: CircleMarker
+  baseRadius: number
+  phase: number
+}
+
+type AmbientAudioDot = {
+  dot: CircleMarker
+  baseRadius: number
+  phase: number
+  flashRate: number
+  threshold: number
+  color: string
+  fillColor: string
+}
+
+type GlobalEventCategory = 'traffic' | 'weather' | 'police' | 'service'
+
+const GLOBAL_EVENT_DOT_COLORS: Record<GlobalEventCategory, { stroke: string; fill: string; label: string }> = {
+  traffic: { stroke: '#f97316', fill: '#fdba74', label: 'Traffic' },
+  weather: { stroke: '#3b82f6', fill: '#93c5fd', label: 'Weather' },
+  police: { stroke: '#ef4444', fill: '#fca5a5', label: 'Police' },
+  service: { stroke: '#14b8a6', fill: '#5eead4', label: 'Service' },
+}
+
+const AUDIO_DOT_COLORS: Array<{ color: string; fillColor: string }> = [
+  { color: '#8ff7ff', fillColor: '#d8ffff' },
+  { color: '#7de3ff', fillColor: '#c7f1ff' },
+  { color: '#6affc7', fillColor: '#bafde2' },
+  { color: '#ffd166', fillColor: '#ffe3a3' },
+  { color: '#ff8fab', fillColor: '#ffc2d2' },
+  { color: '#c3a6ff', fillColor: '#e1d2ff' },
+]
+
+const MAX_REACTIVE_BURSTS = 12
+const AMBIENT_AUDIO_DOT_POOL_SIZE = 36
+const AUDIO_UPDATE_INTERVAL_MS = 140
+
+const NETWORK_POINTS: LatLng[] = [
+  [64, -150], [57, -105], [49, -125], [40, -100], [32, -85], [22, -102], [15, -90], [6, -79],
+  [-5, -62], [-15, -72], [-26, -56], [-36, -66], [-42, -70],
+  [54, -10], [47, 2], [52, 16], [44, 30], [40, 12], [36, -4], [28, 20], [20, 0],
+  [9, 10], [0, 20], [-10, 34], [-22, 18], [-30, 24], [-34, 18],
+  [33, 46], [24, 54], [15, 65], [28, 77], [20, 80], [8, 78], [22, 90], [34, 104],
+  [44, 90], [54, 114], [46, 130], [38, 139], [24, 121], [15, 106], [8, 100], [2, 114],
+  [-6, 120], [-16, 134], [-24, 146], [-31, 153], [-19, 121],
+  [-28, 133], [-34, 147],
+  [65, 40], [60, 70], [56, 98], [60, 130],
+]
+
+function markerColor(node: VisualizationNode, config: VisualizationConfig): string {
+  if (node.status === 'CRITICAL' || node.status === 'OFFLINE') return config.colors.critical
+  if (node.status === 'DEGRADED') return config.colors.degraded
+  return config.colors.nominal
+}
+
+function wrapLongitude(lng: number): number {
+  return ((((lng + 180) % 360) + 360) % 360) - 180
+}
+
+function curvedRoutePoints(start: [number, number], end: [number, number]): [number, number][] {
+  const [startLat, startLng] = start
+  let [endLat, endLng] = end
+  let adjustedEndLng = endLng
+  let deltaLng = adjustedEndLng - startLng
+
+  // Keep routes continuous across the anti-meridian so links connect naturally.
+  if (Math.abs(deltaLng) > 180) {
+    adjustedEndLng += deltaLng > 0 ? -360 : 360
+    deltaLng = adjustedEndLng - startLng
+  }
+
+  const midLat = (startLat + endLat) / 2 + Math.min(16, Math.abs(deltaLng) * 0.04)
+  const midLng = (startLng + adjustedEndLng) / 2
+  return Array.from({ length: 24 }, (_, index) => {
+    const t = index / 23
+    const lat = ((1 - t) * (1 - t) * startLat) + (2 * (1 - t) * t * midLat) + (t * t * endLat)
+    const lng = ((1 - t) * (1 - t) * startLng) + (2 * (1 - t) * t * midLng) + (t * t * adjustedEndLng)
+    return [lat, lng]
+  })
+}
+
+function appendUniquePoint(points: LatLng[], point: LatLng): void {
+  const previous = points[points.length - 1]
+  if (!previous) {
+    points.push(point)
+    return
+  }
+
+  if (Math.abs(previous[0] - point[0]) < 1e-6 && Math.abs(previous[1] - point[1]) < 1e-6) {
+    return
+  }
+  points.push(point)
+}
+
+function splitRouteAtDateLine(points: Array<[number, number]>): LatLng[][] {
+  if (points.length < 2) return []
+
+  const segments: LatLng[][] = []
+  let currentSegment: LatLng[] = []
+  appendUniquePoint(currentSegment, [points[0][0], wrapLongitude(points[0][1])])
+
+  for (let index = 1; index < points.length; index += 1) {
+    const previous = points[index - 1]
+    const next = points[index]
+
+    const previousLng = previous[1]
+    const nextLng = next[1]
+    const previousWorld = Math.floor((previousLng + 180) / 360)
+    const nextWorld = Math.floor((nextLng + 180) / 360)
+
+    if (previousWorld === nextWorld) {
+      appendUniquePoint(currentSegment, [next[0], wrapLongitude(nextLng)])
+      continue
+    }
+
+    const step = nextWorld > previousWorld ? 1 : -1
+    const boundaryLng = step > 0
+      ? 180 + (360 * previousWorld)
+      : -180 + (360 * previousWorld)
+    const ratio = (boundaryLng - previousLng) / (nextLng - previousLng)
+    const boundaryLat = previous[0] + ((next[0] - previous[0]) * ratio)
+    const exitLng: number = step > 0 ? 180 : -180
+    const enterLng: number = step > 0 ? -180 : 180
+
+    appendUniquePoint(currentSegment, [boundaryLat, exitLng])
+    if (currentSegment.length >= 2) {
+      segments.push(currentSegment)
+    }
+
+    currentSegment = []
+    appendUniquePoint(currentSegment, [boundaryLat, enterLng])
+    appendUniquePoint(currentSegment, [next[0], wrapLongitude(nextLng)])
+  }
+
+  if (currentSegment.length >= 2) {
+    segments.push(currentSegment)
+  }
+  return segments
+}
+
+function curvedRouteSegments(start: [number, number], end: [number, number]): LatLng[][] {
+  return splitRouteAtDateLine(curvedRoutePoints(start, end))
+}
+
+function routeColor(from: VisualizationNode, to: VisualizationNode, config: VisualizationConfig): string {
+  if (
+    from.status === 'CRITICAL' || from.status === 'OFFLINE'
+    || to.status === 'CRITICAL' || to.status === 'OFFLINE'
+  ) {
+    return config.colors.critical
+  }
+  if (from.status === 'DEGRADED' || to.status === 'DEGRADED') {
+    return config.colors.degraded
+  }
+  return config.colors.wireframe
+}
+
+function planarDistance(a: LatLng, b: LatLng): number {
+  const latScale = 1
+  const lngScale = Math.cos((((a[0] + b[0]) / 2) * Math.PI) / 180)
+  const dx = (a[1] - b[1]) * Math.max(0.35, lngScale)
+  const dy = (a[0] - b[0]) * latScale
+  return Math.sqrt((dx * dx) + (dy * dy))
+}
+
+function triangulatedMeshSegments(points: LatLng[], neighbors = 4, maxDistance = 34): Array<[LatLng, LatLng]> {
+  const edges = new Set<string>()
+  const segments: Array<[LatLng, LatLng]> = []
+
+  points.forEach((point, index) => {
+    const nearest = points
+      .map((candidate, candidateIndex) => ({ candidate, candidateIndex, distance: planarDistance(point, candidate) }))
+      .filter(({ candidateIndex, distance }) => candidateIndex !== index && distance <= maxDistance)
+      .sort((a, b) => a.distance - b.distance)
+      .slice(0, neighbors)
+
+    nearest.forEach(({ candidateIndex }) => {
+      const i = Math.min(index, candidateIndex)
+      const j = Math.max(index, candidateIndex)
+      const key = `${i}-${j}`
+      if (edges.has(key)) return
+      edges.add(key)
+      segments.push([points[i], points[j]])
+    })
+  })
+
+  return segments
+}
+
+function clamp01(value: number): number {
+  return Math.max(0, Math.min(1, value))
+}
+
+function randomPoint(points: LatLng[]): LatLng {
+  return points[Math.floor(Math.random() * points.length)]
+}
+
+function normalizeAlertCategory(rawType: string): GlobalEventCategory {
+  const value = rawType.trim().toLowerCase()
+  if (value.includes('weather') || value.includes('storm') || value.includes('flood') || value.includes('wind')) {
+    return 'weather'
+  }
+  if (value.includes('police') || value.includes('law') || value.includes('crime') || value.includes('security')) {
+    return 'police'
+  }
+  if (
+    value.includes('service')
+    || value.includes('closure')
+    || value.includes('utility')
+    || value.includes('maintenance')
+    || value.includes('outage')
+  ) {
+    return 'service'
+  }
+  return 'traffic'
+}
+
+function hashStringToInt(value: string): number {
+  let hash = 0
+  for (let index = 0; index < value.length; index += 1) {
+    hash = ((hash << 5) - hash) + value.charCodeAt(index)
+    hash |= 0
+  }
+  return Math.abs(hash)
+}
+
+function fallbackAlertPoint(alert: VisualizationAlert): LatLng {
+  const hash = hashStringToInt(`${alert.id}:${alert.type}`)
+  const source = NETWORK_POINTS[hash % NETWORK_POINTS.length]
+  const latOffset = (((hash >> 3) % 120) / 120 - 0.5) * 6
+  const lngOffset = (((hash >> 11) % 120) / 120 - 0.5) * 8
+  return [
+    Math.max(-67, Math.min(81, source[0] + latOffset)),
+    wrapLongitude(source[1] + lngOffset),
+  ]
+}
+
+export function initMap(container: HTMLElement, config: VisualizationConfig): MapController {
+  const WORLD_BOUNDS: [[number, number], [number, number]] = [[-68, -180], [82, 180]]
+  const WORLD_LAT_MIN = WORLD_BOUNDS[0][0]
+  const WORLD_LAT_MAX = WORLD_BOUNDS[1][0]
+  const map = L.map(container, {
+    zoomControl: true,
+    attributionControl: false,
+    minZoom: config.minZoom,
+    maxZoom: Math.max(config.maxZoom, 19),
+    worldCopyJump: true,
+  }).setView([20, 0], 2)
+
+  L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+    maxZoom: 19,
+    noWrap: false,
+    className: 'surveillance-satellite-tiles',
+  }).addTo(map)
+
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}{r}.png', {
+    maxZoom: 20,
+    subdomains: 'abcd',
+    opacity: 0.86,
+    className: 'surveillance-street-labels',
+  }).addTo(map)
+
+  const gridLayer = L.layerGroup().addTo(map)
+  const meshLayer = L.layerGroup().addTo(map)
+  const reactiveMeshLayer = L.layerGroup().addTo(map)
+  const ambientDotLayer = L.layerGroup().addTo(map)
+  const globalEventLayer = L.layerGroup().addTo(map)
+  const markerLayer = L.layerGroup().addTo(map)
+  const connectionLayer = L.layerGroup().addTo(map)
+  const alertLayer = L.layerGroup().addTo(map)
+
+  const continentMeshLines: Polyline[] = []
+  const continentMeshNodes: CircleMarker[] = []
+  const reactiveBursts: ReactiveBurst[] = []
+  const ambientAudioDots: AmbientAudioDot[] = []
+  const gridAudioProfiles: WireAudioProfile[] = []
+  let routeAudioProfiles: WireAudioProfile[] = []
+  let alertRingProfiles: RingAudioProfile[] = []
+
+  let audioReactiveEnabled = false
+  let audioReactiveLevel = 0
+  let audioReactiveBands: AudioReactiveBands = { bass: 0, mid: 0, treble: 0, pulse: 0, beat: 0 }
+  let motionStep = 0
+
+  triangulatedMeshSegments(NETWORK_POINTS).forEach(([start, end], index) => {
+    const meshLine = L.polyline([start, end], {
+      color: '#79f6ff',
+      weight: index % 8 === 0 ? 1.45 : 0.95,
+      opacity: index % 8 === 0 ? 0.72 : 0.4,
+      interactive: false,
+      className: 'surveillance-continent-mesh',
+    }).addTo(meshLayer)
+    continentMeshLines.push(meshLine)
+  })
+
+  NETWORK_POINTS.forEach((point, index) => {
+    const meshNode = L.circleMarker(point, {
+      radius: index % 7 === 0 ? 3.8 : 2.3,
+      color: '#8df8ff',
+      fillColor: '#d8ffff',
+      fillOpacity: 0.92,
+      opacity: 0.9,
+      weight: 0,
+      interactive: false,
+      className: 'surveillance-mesh-node',
+    }).addTo(meshLayer)
+    continentMeshNodes.push(meshNode)
+  })
+
+  const pruneReactiveBursts = () => {
+    const now = Date.now()
+    for (let index = reactiveBursts.length - 1; index >= 0; index -= 1) {
+      const burst = reactiveBursts[index]
+      const age = now - burst.createdAt
+      if (age >= burst.ttl) {
+        burst.line.remove()
+        burst.startDot.remove()
+        burst.endDot.remove()
+        reactiveBursts.splice(index, 1)
+        continue
+      }
+
+      const life = 1 - (age / burst.ttl)
+      const flicker = 0.72 + (Math.sin((motionStep * 0.32) + index) * 0.28)
+      const pulse = clamp01(life * flicker)
+      burst.line.setStyle({
+        opacity: 0.18 + (pulse * 0.85),
+        weight: 0.8 + (pulse * 2.4),
+      })
+
+      burst.startDot.setStyle({
+        opacity: 0.24 + (pulse * 0.74),
+        fillOpacity: 0.22 + (pulse * 0.76),
+      })
+      burst.endDot.setStyle({
+        opacity: 0.24 + (pulse * 0.74),
+        fillOpacity: 0.22 + (pulse * 0.76),
+      })
+    }
+  }
+
+  const spawnReactiveBurst = (intensity: number) => {
+    if (reactiveBursts.length >= MAX_REACTIVE_BURSTS) {
+      const oldestBurst = reactiveBursts.shift()
+      oldestBurst?.line.remove()
+      oldestBurst?.startDot.remove()
+      oldestBurst?.endDot.remove()
+    }
+
+    const start = randomPoint(NETWORK_POINTS)
+    let end = randomPoint(NETWORK_POINTS)
+    for (let guard = 0; guard < 3 && start === end; guard += 1) {
+      end = randomPoint(NETWORK_POINTS)
+    }
+
+    const ttl = 620 + Math.round(820 * intensity)
+    const line = L.polyline(curvedRouteSegments(start, end), {
+      color: '#8af7ff',
+      weight: 1.2 + (2.1 * intensity),
+      opacity: 0.55 + (0.3 * intensity),
+      interactive: false,
+      className: 'surveillance-audio-wire',
+    }).addTo(reactiveMeshLayer)
+
+    const startDot = L.circleMarker(start, {
+      radius: 2 + (3.2 * intensity),
+      color: '#a8fcff',
+      fillColor: '#e0ffff',
+      fillOpacity: 0.85,
+      opacity: 0.9,
+      weight: 0,
+      interactive: false,
+      className: 'surveillance-audio-dot',
+    }).addTo(reactiveMeshLayer)
+
+    const endDot = L.circleMarker(end, {
+      radius: 2 + (3.2 * intensity),
+      color: '#a8fcff',
+      fillColor: '#e0ffff',
+      fillOpacity: 0.85,
+      opacity: 0.9,
+      weight: 0,
+      interactive: false,
+      className: 'surveillance-audio-dot',
+    }).addTo(reactiveMeshLayer)
+
+    reactiveBursts.push({ line, startDot, endDot, createdAt: Date.now(), ttl })
+  }
+
+  const randomWorldPoint = (): LatLng => {
+    const lat = WORLD_LAT_MIN + (Math.random() * (WORLD_LAT_MAX - WORLD_LAT_MIN))
+    const lng = -180 + (Math.random() * 360)
+    return [lat, lng]
+  }
+
+  const randomViewportPoint = (): LatLng => {
+    const bounds = map.getBounds()
+    const south = Math.max(WORLD_LAT_MIN, bounds.getSouth())
+    const north = Math.min(WORLD_LAT_MAX, bounds.getNorth())
+    const west = bounds.getWest()
+    const east = bounds.getEast()
+
+    const lat = south + (Math.random() * Math.max(0.0001, north - south))
+    const lngRaw = west + (Math.random() * Math.max(0.0001, east - west))
+    const lng = wrapLongitude(lngRaw)
+    return [lat, lng]
+  }
+
+  const randomCoastPoint = (): LatLng => {
+    const source = randomPoint(NETWORK_POINTS)
+    const lat = Math.max(WORLD_LAT_MIN, Math.min(WORLD_LAT_MAX, source[0] + ((Math.random() - 0.5) * 9.5)))
+    const lngRaw = source[1] + ((Math.random() - 0.5) * 13)
+    const lng = wrapLongitude(lngRaw)
+    return [lat, lng]
+  }
+
+  const randomTransitPoint = (): LatLng => {
+    const start = randomPoint(NETWORK_POINTS)
+    let end = randomPoint(NETWORK_POINTS)
+    for (let guard = 0; guard < 3 && start === end; guard += 1) {
+      end = randomPoint(NETWORK_POINTS)
+    }
+    const route = curvedRoutePoints(start, end)
+    const sample = route[Math.floor(Math.random() * route.length)]
+    return [sample[0], wrapLongitude(sample[1])]
+  }
+
+  const createAmbientAudioDot = (intensity: number, pulse: number, beat: number, treble: number) => {
+    const spawnRoll = Math.random()
+    const location = spawnRoll < 0.5
+      ? randomViewportPoint()
+      : spawnRoll < 0.78
+        ? randomWorldPoint()
+        : spawnRoll < 0.9
+          ? randomCoastPoint()
+          : randomTransitPoint()
+
+    const baseRadius = 1.1 + (intensity * 2.6) + (treble * 0.8)
+    const ttl = 620 + Math.round((980 * intensity) + (420 * pulse) + (260 * beat))
+    const palette = AUDIO_DOT_COLORS[Math.floor(Math.random() * AUDIO_DOT_COLORS.length)]
+    const dot = L.circleMarker(location, {
+      radius: baseRadius,
+      color: palette.color,
+      fillColor: palette.fillColor,
+      fillOpacity: 0.9,
+      opacity: 0.9,
+      weight: 0,
+      interactive: false,
+      className: 'surveillance-audio-scatter-dot',
+    }).addTo(ambientDotLayer)
+
+    return {
+      dot,
+      baseRadius,
+      phase: Math.random() * Math.PI * 2,
+      flashRate: 0.35 + (Math.random() * 0.55),
+      threshold: 0.46 + (Math.random() * 0.24),
+      color: palette.color,
+      fillColor: palette.fillColor,
+    }
+  }
+
+  const initializeAmbientAudioDots = () => {
+    if (ambientAudioDots.length > 0) return
+
+    for (let index = 0; index < AMBIENT_AUDIO_DOT_POOL_SIZE; index += 1) {
+      const intensity = 0.2 + (Math.random() * 0.7)
+      const pulse = 0.1 + (Math.random() * 0.9)
+      const beat = 0.08 + (Math.random() * 0.82)
+      const treble = 0.12 + (Math.random() * 0.78)
+      ambientAudioDots.push(createAmbientAudioDot(intensity, pulse, beat, treble))
+    }
+  }
+
+  const updateAmbientAudioDots = (loudness: number, tempo: number, treble: number, pulse: number): number => {
+    let activeCount = 0
+    ambientAudioDots.forEach((entry, index) => {
+      const strobe = 0.5 + (Math.sin((motionStep * entry.flashRate) + entry.phase + (index * 0.19)) * 0.5)
+      const intensity = clamp01((loudness * 0.46) + (tempo * 0.34) + (treble * 0.2) + (pulse * 0.24))
+      const isOn = (intensity + (strobe * 0.55)) > entry.threshold
+      if (isOn) activeCount += 1
+
+      entry.dot.setStyle({
+        color: entry.color,
+        fillColor: entry.fillColor,
+        opacity: isOn ? 0.9 : 0.02,
+        fillOpacity: isOn ? 0.86 : 0.015,
+      })
+    })
+
+    return activeCount
+  }
+
+  const updateReactiveMesh = () => {
+    motionStep += 1
+    const skipPassiveFrame = !audioReactiveEnabled
+      && reactiveBursts.length === 0
+      && (motionStep % 3 !== 0)
+    if (skipPassiveFrame) return
+
+    const fallbackPulse = 0.14 + (Math.sin(motionStep * 0.05) * 0.08)
+    const pulse = audioReactiveEnabled ? clamp01((audioReactiveBands.pulse * 0.7) + (audioReactiveLevel * 0.3)) : fallbackPulse
+    const beat = audioReactiveEnabled ? clamp01(audioReactiveBands.beat) : 0.08 + (Math.sin((motionStep * 0.09) + 1.2) * 0.04)
+    const bass = audioReactiveEnabled ? clamp01(audioReactiveBands.bass) : 0.1 + (Math.sin((motionStep * 0.07) + 0.5) * 0.05)
+    const mid = audioReactiveEnabled ? clamp01(audioReactiveBands.mid) : 0.11 + (Math.sin((motionStep * 0.06) + 2.4) * 0.05)
+    const treble = audioReactiveEnabled ? clamp01(audioReactiveBands.treble) : 0.12 + (Math.sin((motionStep * 0.11) + 0.8) * 0.05)
+
+    gridAudioProfiles.forEach((profile, index) => {
+      const shimmer = 0.5 + (Math.sin((motionStep * 0.13) + profile.phase + (index * 0.23)) * 0.5)
+      const energy = clamp01((pulse * 0.5) + (treble * 0.32) + (mid * 0.18) + (shimmer * 0.2))
+      const visibility = clamp01((energy * 1.12) - 0.14)
+      profile.line.setStyle({
+        opacity: 0.02 + (visibility * ((profile.baseOpacity * 0.7) + (0.34 * profile.intensity))),
+        weight: 0.18 + (visibility * ((profile.baseWeight * 0.7) + (0.8 * profile.intensity))),
+      })
+    })
+
+    continentMeshLines.forEach((line, index) => {
+      const stride = 0.74 + (((index % 9) / 8) * 0.6)
+      const shimmer = 0.5 + (Math.sin((motionStep * 0.1 * stride) + index) * 0.5)
+      const energy = clamp01((pulse * (0.62 + (shimmer * 0.38))) + (beat * 0.24))
+      line.setStyle({
+        opacity: 0.22 + (energy * 0.68),
+        weight: 0.85 + (energy * 1.6),
+      })
+    })
+
+    continentMeshNodes.forEach((node, index) => {
+      const jitter = 0.55 + (Math.sin((motionStep * 0.16) + index) * 0.45)
+      const nodeEnergy = clamp01((pulse * 0.75) + (jitter * 0.25))
+      const radius = (index % 7 === 0 ? 3.1 : 2.0) + (nodeEnergy * (2.4 + (bass * 0.8)))
+      node.setRadius(radius)
+      node.setStyle({
+        fillOpacity: 0.24 + (nodeEnergy * 0.72),
+        opacity: 0.32 + (nodeEnergy * 0.64),
+      })
+    })
+
+    routeAudioProfiles.forEach((profile, index) => {
+      const shimmer = 0.5 + (Math.sin((motionStep * 0.14) + profile.phase + (index * 0.17)) * 0.5)
+      const energy = clamp01((pulse * 0.56) + (beat * 0.34) + (mid * 0.2) + (shimmer * 0.26))
+      const visibility = clamp01((energy * 1.18) - 0.2)
+      profile.line.setStyle({
+        opacity: 0.03 + (visibility * ((profile.baseOpacity * 0.9) + (0.5 * profile.intensity))),
+        weight: 0.26 + (visibility * ((profile.baseWeight * 0.86) + (1.8 * profile.intensity))),
+      })
+    })
+
+    alertRingProfiles.forEach((profile, index) => {
+      const shimmer = 0.5 + (Math.sin((motionStep * 0.22) + profile.phase + (index * 0.31)) * 0.5)
+      const ringEnergy = clamp01((beat * 0.52) + (pulse * 0.34) + (treble * 0.22) + (shimmer * 0.24))
+      profile.ring.setRadius(profile.baseRadius + (ringEnergy * 8.2))
+      profile.ring.setStyle({
+        opacity: 0.08 + (ringEnergy * 0.86),
+        weight: 0.55 + (ringEnergy * 1.7),
+      })
+    })
+
+    const loudness = clamp01((audioReactiveLevel * 0.45) + (pulse * 0.35) + (bass * 0.2))
+    const tempo = clamp01((beat * 0.65) + (mid * 0.2) + (treble * 0.15))
+    const activeAmbientDots = updateAmbientAudioDots(loudness, tempo, treble, pulse)
+
+    const burstLoad = reactiveBursts.length / MAX_REACTIVE_BURSTS
+    const dotLoad = activeAmbientDots / AMBIENT_AUDIO_DOT_POOL_SIZE
+    const performancePressure = clamp01((burstLoad * 0.45) + (dotLoad * 0.55))
+
+    const spawnChance = audioReactiveEnabled
+      ? clamp01((0.08 + (pulse * 0.44) + (beat * 0.34)) * (1 - (performancePressure * 0.55)))
+      : 0.04
+
+    if (Math.random() < spawnChance) {
+      const burstCount = audioReactiveEnabled
+        ? Math.max(1, Math.round((1 + (beat * 3)) * (1 - (performancePressure * 0.65))))
+        : 1
+      const intensity = clamp01(((pulse * 0.68) + (beat * 0.32)) * (1 - (performancePressure * 0.18)))
+      for (let index = 0; index < burstCount; index += 1) {
+        spawnReactiveBurst(intensity)
+      }
+    }
+
+    pruneReactiveBursts()
+  }
+
+  initializeAmbientAudioDots()
+
+  const reactiveTimer = window.setInterval(updateReactiveMesh, AUDIO_UPDATE_INTERVAL_MS)
+
+  for (let lat = -80; lat <= 80; lat += 20) {
+    const line = L.polyline([[lat, -180], [lat, 180]], {
+      color: config.colors.wireframe,
+      weight: 0.45,
+      opacity: 0.4,
+      interactive: false,
+      className: 'surveillance-gridline',
+    }).addTo(gridLayer)
+    gridAudioProfiles.push({ line, baseOpacity: 0.4, baseWeight: 0.45, intensity: 0.66, phase: lat * 0.07 })
+  }
+  for (let lon = -180; lon <= 180; lon += 30) {
+    const line = L.polyline([[-80, lon], [80, lon]], {
+      color: config.colors.wireframe,
+      weight: 0.45,
+      opacity: 0.4,
+      interactive: false,
+      className: 'surveillance-gridline',
+    }).addTo(gridLayer)
+    gridAudioProfiles.push({ line, baseOpacity: 0.4, baseWeight: 0.45, intensity: 0.7, phase: lon * 0.04 })
+  }
+
+  let markers: CircleMarker[] = []
+  let connections: Polyline[] = []
+  let alertsRings: CircleMarker[] = []
+  let latencyRings: CircleMarker[] = []
+  let globalEventDots: CircleMarker[] = []
+  let hasInitialBounds = false
+  let lastFocusedNodeId: string | undefined
+
+  const markUserNavigation = () => {
+    hasInitialBounds = true
+  }
+
+  map.on('dragstart', markUserNavigation)
+  map.on('zoomstart', markUserNavigation)
+
+  const applyRouteDynamics = (line: Polyline, avgLatency: number, riskLevel: 'normal' | 'elevated' | 'critical') => {
+    const element = line.getElement() as SVGPathElement | null
+    if (!element) return
+
+    const speedSeconds = Math.max(2.6, Math.min(10, 2.6 + (avgLatency / 42)))
+    const glowStrength = Math.max(0.24, Math.min(0.92, 1 - (avgLatency / 280)))
+    element.style.setProperty('--route-speed', `${speedSeconds.toFixed(2)}s`)
+    element.style.setProperty('--route-glow', glowStrength.toFixed(2))
+    element.classList.remove('surveillance-route-line--normal', 'surveillance-route-line--elevated', 'surveillance-route-line--critical')
+    element.classList.add(
+      riskLevel === 'critical'
+        ? 'surveillance-route-line--critical'
+        : riskLevel === 'elevated'
+          ? 'surveillance-route-line--elevated'
+          : 'surveillance-route-line--normal',
+    )
+  }
+
+  const forceFullSize = () => {
+    // Leaflet can initialize with stale dimensions when parent layout is still settling.
+    map.invalidateSize({ pan: false, animate: false })
+  }
+
+  const resizeObserver = new ResizeObserver(() => {
+    forceFullSize()
+  })
+  resizeObserver.observe(container)
+
+  requestAnimationFrame(() => {
+    forceFullSize()
+    requestAnimationFrame(() => forceFullSize())
+  })
+
+  const setData = (nodes: VisualizationNode[], alerts: VisualizationAlert[], focusedNodeId?: string) => {
+    forceFullSize()
+
+    markers.forEach((marker) => marker.remove())
+    connections.forEach((line) => line.remove())
+    alertsRings.forEach((marker) => marker.remove())
+    latencyRings.forEach((ring) => ring.remove())
+    globalEventDots.forEach((dot) => dot.remove())
+    markers = []
+    connections = []
+    alertsRings = []
+    latencyRings = []
+    globalEventDots = []
+    routeAudioProfiles = []
+    alertRingProfiles = []
+
+    const nodeById = new Map(nodes.map((node) => [node.id, node]))
+    const edgeRegistry = new Set<string>()
+
+    for (const node of nodes) {
+      const marker = L.circleMarker([node.lat, node.lng], {
+        radius: 5,
+        color: markerColor(node, config),
+        fillColor: markerColor(node, config),
+        fillOpacity: 0.92,
+        opacity: 0.95,
+        weight: 1,
+        className: 'surveillance-node-marker',
+      }).addTo(markerLayer)
+      marker.bindTooltip(`${node.country} · ${node.region} · ${node.latencyMs}ms · ${node.status}`, { direction: 'top', opacity: 0.92 })
+      markers.push(marker)
+
+      const latencyRing = L.circleMarker([node.lat, node.lng], {
+        radius: 8 + Math.min(node.latencyMs / 28, 12),
+        color: markerColor(node, config),
+        fillOpacity: 0,
+        opacity: 0.35,
+        weight: 1,
+        className: 'surveillance-latency-ring',
+      }).addTo(alertLayer)
+      latencyRings.push(latencyRing)
+
+      for (const connectionId of node.connections) {
+        const target = nodeById.get(connectionId)
+        if (!target) continue
+
+        const edgeKey = node.id < target.id ? `${node.id}|${target.id}` : `${target.id}|${node.id}`
+        if (edgeRegistry.has(edgeKey)) continue
+        edgeRegistry.add(edgeKey)
+
+        const avgLatency = (node.latencyMs + target.latencyMs) / 2
+        const riskLevel: 'normal' | 'elevated' | 'critical' = (
+          node.status === 'CRITICAL' || node.status === 'OFFLINE' || target.status === 'CRITICAL' || target.status === 'OFFLINE'
+            ? 'critical'
+            : node.status === 'DEGRADED' || target.status === 'DEGRADED' || avgLatency >= 120
+              ? 'elevated'
+              : 'normal'
+        )
+
+        const line = L.polyline(curvedRouteSegments([node.lat, node.lng], [target.lat, target.lng]), {
+          color: routeColor(node, target, config),
+          opacity: riskLevel === 'critical' ? 0.72 : riskLevel === 'elevated' ? 0.56 : 0.44,
+          weight: riskLevel === 'critical' ? 1.9 : riskLevel === 'elevated' ? 1.5 : 1.15,
+          className: 'surveillance-route-line',
+        }).addTo(connectionLayer)
+        applyRouteDynamics(line, avgLatency, riskLevel)
+        line.on('add', () => applyRouteDynamics(line, avgLatency, riskLevel))
+        connections.push(line)
+        routeAudioProfiles.push({
+          line,
+          baseOpacity: riskLevel === 'critical' ? 0.72 : riskLevel === 'elevated' ? 0.56 : 0.44,
+          baseWeight: riskLevel === 'critical' ? 1.9 : riskLevel === 'elevated' ? 1.5 : 1.15,
+          intensity: riskLevel === 'critical' ? 1 : riskLevel === 'elevated' ? 0.82 : 0.68,
+          phase: (node.lat * 0.03) + (target.lng * 0.02),
+        })
+      }
+    }
+
+    for (const alert of alerts) {
+      const node = alert.serverId ? nodeById.get(alert.serverId) : undefined
+      const category = normalizeAlertCategory(alert.type)
+      const palette = GLOBAL_EVENT_DOT_COLORS[category]
+      const alertLocation: LatLng = (
+        typeof alert.lat === 'number' && typeof alert.lng === 'number'
+          ? [alert.lat, wrapLongitude(alert.lng)]
+          : alert.location && typeof alert.location.lat === 'number' && typeof alert.location.lng === 'number'
+            ? [alert.location.lat, wrapLongitude(alert.location.lng)]
+          : node
+            ? [node.lat, node.lng]
+            : fallbackAlertPoint(alert)
+      )
+
+      const eventDot = L.circleMarker(alertLocation, {
+        radius: 6.2,
+        color: palette.stroke,
+        fillColor: palette.fill,
+        fillOpacity: 0.78,
+        opacity: 0.92,
+        weight: 1.4,
+        className: 'surveillance-global-event-dot',
+      }).addTo(globalEventLayer)
+
+      const dotTitle = alert.title ?? `${palette.label} alert`
+      const dotSubtitle = `${alert.type} · ${alert.severity}`
+      eventDot.bindTooltip(dotTitle, {
+        direction: 'top',
+        opacity: 0.92,
+      })
+      eventDot.on('mouseover', () => {
+        eventDot.setTooltipContent(`${dotTitle} (${dotSubtitle})`)
+      })
+      globalEventDots.push(eventDot)
+
+      if (!node) continue
+
+      const ring = L.circleMarker([node.lat, node.lng], {
+        radius: 10,
+        color: alert.severity === 'CRITICAL' || alert.severity === 'EMERGENCY' ? config.colors.critical : alert.severity === 'WARNING' ? config.colors.degraded : config.colors.wireframe,
+        fillOpacity: 0,
+        opacity: 0.85,
+        weight: 1.2,
+        className: 'surveillance-alert-ring',
+      }).addTo(alertLayer)
+      alertsRings.push(ring)
+      alertRingProfiles.push({ ring, baseRadius: 10, phase: (node.lat * 0.05) + (node.lng * 0.03) })
+    }
+
+    if (!hasInitialBounds) {
+      map.fitBounds(WORLD_BOUNDS, { padding: [8, 8], animate: true, duration: 0.6 })
+      hasInitialBounds = true
+    }
+
+    const focusedNode = focusedNodeId ? nodeById.get(focusedNodeId) : undefined
+    if (focusedNode && focusedNodeId !== lastFocusedNodeId) {
+      map.panTo([focusedNode.lat, focusedNode.lng], { animate: true, duration: 0.7 })
+      lastFocusedNodeId = focusedNodeId
+      hasInitialBounds = true
+    }
+
+    if (!focusedNodeId) {
+      lastFocusedNodeId = undefined
+    }
+  }
+
+  const setAltitude = (altitude: number) => {
+    forceFullSize()
+    const maxOperationalZoom = Math.max(config.maxZoom, 18)
+    const zoom = Math.round(config.minZoom + ((100 - altitude) / 100) * (maxOperationalZoom - config.minZoom))
+    map.setZoom(Math.max(config.minZoom, Math.min(maxOperationalZoom, zoom)))
+  }
+
+  return {
+    setData,
+    setAltitude,
+    setAudioReactive: (enabled: boolean, level = 0, bands?: AudioReactiveBands) => {
+      audioReactiveEnabled = enabled
+      audioReactiveLevel = clamp01(level)
+      if (bands) {
+        audioReactiveBands = {
+          bass: clamp01(bands.bass),
+          mid: clamp01(bands.mid),
+          treble: clamp01(bands.treble),
+          pulse: clamp01(bands.pulse),
+          beat: clamp01(bands.beat),
+        }
+      } else if (!enabled) {
+        audioReactiveBands = { bass: 0, mid: 0, treble: 0, pulse: 0, beat: 0 }
+      }
+    },
+    destroy: () => {
+      window.clearInterval(reactiveTimer)
+      reactiveBursts.forEach((burst) => {
+        burst.line.remove()
+        burst.startDot.remove()
+        burst.endDot.remove()
+      })
+      reactiveBursts.length = 0
+      ambientAudioDots.forEach((entry) => {
+        entry.dot.remove()
+      })
+      ambientAudioDots.length = 0
+      globalEventDots.forEach((dot) => {
+        dot.remove()
+      })
+      globalEventDots.length = 0
+      map.off('dragstart', markUserNavigation)
+      map.off('zoomstart', markUserNavigation)
+      resizeObserver.disconnect()
+      map.remove()
+    },
+  }
+}

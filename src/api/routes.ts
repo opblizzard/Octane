@@ -13,6 +13,7 @@ import { oanHandler }        from './handlers/oan.js';
 import { flowHandler }       from './handlers/flows.js';
 import { governanceHandler } from './handlers/governance.js';
 import { metricsHandler }    from './handlers/metrics.js';
+import { surveillanceRouter } from './handlers/surveillance.js';
 
 export function createRouter(): Hono<{ Bindings: Env }> {
   const app = new Hono<{ Bindings: Env }>();
@@ -86,6 +87,9 @@ export function createRouter(): Hono<{ Bindings: Env }> {
   app.delete('/governance/decree/:id',    governanceHandler.revokeDecree);
   app.post('/governance/ethics/check',    governanceHandler.ethicsCheck);
   app.get ('/governance/ethics/log',      governanceHandler.ethicsLog);
+
+  // ── v6 Surveillance ───────────────────────────────────────────
+  app.route('/v6/surveillance', surveillanceRouter);
 
   return app;
 }

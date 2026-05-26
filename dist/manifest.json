@@ -1,7 +1,7 @@
 {
-  "name": "Octane v4 — Chaos-Governor Edition",
-  "short_name": "Octane v4",
-  "description": "Sovereign AI Operator Dashboard by Ionirix LLC",
+  "name": "Octane v6 — Aurora Edition",
+  "short_name": "Octane v6",
+  "description": "Octane v6 surveillance and operator command suite by Ionirix LLC",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#080c12",

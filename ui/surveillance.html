@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Octane v6 Surveillance</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #07111c;
+        --panel: rgba(10, 20, 34, 0.9);
+        --line: rgba(120, 184, 255, 0.18);
+        --text: #e7f2ff;
+        --muted: #8ca5bf;
+        --accent: #75c9ff;
+      }
+
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+        color: var(--text);
+        background:
+          radial-gradient(circle at top, rgba(80, 147, 255, 0.24), transparent 36%),
+          linear-gradient(180deg, #06101b 0%, #07111c 48%, #03070d 100%);
+      }
+
+      .shell {
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        padding: 32px;
+      }
+
+      .card {
+        width: min(960px, 100%);
+        border: 1px solid var(--line);
+        background: var(--panel);
+        backdrop-filter: blur(18px);
+        border-radius: 24px;
+        padding: 28px;
+        box-shadow: 0 30px 120px rgba(0, 0, 0, 0.35);
+      }
+
+      h1 { margin: 0 0 8px; font-size: clamp(2rem, 4vw, 4rem); }
+      p { margin: 0; color: var(--muted); line-height: 1.6; }
+
+      .grid {
+        margin-top: 24px;
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 14px;
+      }
+
+      .tile {
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        padding: 18px;
+        background: rgba(6, 14, 24, 0.72);
+      }
+
+      .tile strong {
+        display: block;
+        margin-bottom: 6px;
+        color: var(--accent);
+        font-size: 0.82rem;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      @media (max-width: 720px) {
+        .grid { grid-template-columns: 1fr; }
+        .card { padding: 20px; }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="shell">
+      <section class="card">
+        <h1>SENTINEL</h1>
+        <p>Octane v6 surveillance interface placeholder. The durable object-backed API exposes planetary node snapshots and alert state.</p>
+
+        <div class="grid">
+          <div class="tile"><strong>Snapshot</strong><span>14 nodes, live map state, alert counts</span></div>
+          <div class="tile"><strong>Routes</strong><span>/api/v6/surveillance/snapshot and related endpoints</span></div>
+          <div class="tile"><strong>State</strong><span>Global, durable, edge-synchronized monitoring</span></div>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>

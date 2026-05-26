@@ -371,6 +371,73 @@ export interface HealthStatus {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// SURVEILLANCE TYPES
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type ServerRegion =
+  | 'us-east-1' | 'us-west-1' | 'eu-west-1' | 'eu-central'
+  | 'ap-east-1' | 'ap-south-1' | 'ap-aus-1' | 'sa-east-1'
+  | 'af-south-1' | 'me-south-1' | 'ca-central' | 'eu-north-1'
+  | 'ap-india-1' | 'uk-south-1';
+
+export type NodeStatus = 'NOMINAL' | 'DEGRADED' | 'CRITICAL' | 'OFFLINE';
+export type AlertSeverity = 'INFO' | 'WARNING' | 'CRITICAL' | 'EMERGENCY';
+export type MapLayer = 'DARK' | 'SATELLITE' | 'TERRAIN' | 'NIGHT';
+export type OverlayType = 'TRAFFIC' | 'WEATHER' | 'WIND' | 'TEMPERATURE' | 'PRECIPITATION' | 'SERVERS';
+
+export interface ServerNode {
+  id: ServerRegion;
+  name: string;
+  country: string;
+  region: string;
+  lat: number;
+  lng: number;
+  status: NodeStatus;
+  latencyMs: number;
+  loadPercent: number;
+  requestsPerMin: number;
+  uptimePercent: number;
+  lastHeartbeat: number;
+  connections: ServerRegion[];
+}
+
+export interface SurveillanceAlert {
+  id: string;
+  type: 'TRAFFIC' | 'WEATHER' | 'SERVER' | 'SECURITY' | 'GEOPOLITICAL' | 'POLICE' | 'SERVICE' | 'CLOSURE' | 'UTILITY';
+  severity: AlertSeverity;
+  title: string;
+  description: string;
+  location?: { lat: number; lng: number; radius: number };
+  serverId?: ServerRegion;
+  timestamp: number;
+  resolved: boolean;
+  resolvedAt?: number;
+}
+
+export interface MapViewState {
+  mode: '2D' | '3D';
+  center: [number, number];
+  zoom: number;
+  bearing: number;
+  pitch: number;
+  activeLayers: OverlayType[];
+  baseLayer: MapLayer;
+}
+
+export interface SurveillanceSnapshot {
+  timestamp: number;
+  totalNodes: number;
+  onlineNodes: number;
+  degradedNodes: number;
+  criticalNodes: number;
+  offlineNodes: number;
+  globalLatencyMs: number;
+  totalRequestsPerMin: number;
+  activeAlerts: number;
+  mapState: MapViewState;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // CLOUDFLARE ENV
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -392,6 +459,7 @@ export interface Env {
   ELX_LATTICE:          DurableObjectNamespace;
   OAN_NODE:             DurableObjectNamespace;
   ORCHESTRATION_FEED:    DurableObjectNamespace;
+  SURVEILLANCE_DO:      DurableObjectNamespace;
   // Vars
   OCTANE_VERSION:       string;
   OCTANE_CODENAME:      string;
@@ -401,4 +469,21 @@ export interface Env {
   OPERATOR:             string;
   ISSUE_DATE:           string;
   CLASSIFICATION:       string;
+}
+
+export interface OctaneEnv {
+  OCTANE_KV: KVNamespace;
+  OPERATOR_KV: KVNamespace;
+  OCTANE_STORAGE: R2Bucket;
+  SURVEILLANCE_STORAGE: R2Bucket;
+  OCTANE_DB: D1Database;
+  SRC_DO: DurableObjectNamespace;
+  CBE_DO: DurableObjectNamespace;
+  ELX_DO: DurableObjectNamespace;
+  OAN_DO: DurableObjectNamespace;
+  SURVEILLANCE_DO: DurableObjectNamespace;
+  OCTANE_VERSION: string;
+  OCTANE_CODENAME: string;
+  OCTANE_CLASSIFICATION: string;
+  ENVIRONMENT: string;
 }

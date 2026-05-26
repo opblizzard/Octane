@@ -27,7 +27,7 @@ export function TopBar({ onMenuToggle }: TopBarProps) {
         <div className="flex items-center gap-2">
           <div className="w-2 h-2 rounded-full animate-pulse" style={{ background: color, boxShadow: `0 0 8px ${color}` }} />
           <span className="text-[12px] md:text-[13px] font-bold tracking-widest" style={{ color }}>OCTANE</span>
-          <span className="hidden sm:inline text-[9px] text-[var(--muted)] border border-[var(--border)] px-1.5 py-0.5 rounded">v5 STELLAR + LEGACY</span>
+          <span className="hidden sm:inline text-[9px] text-[var(--muted)] border border-[var(--border)] px-1.5 py-0.5 rounded">v6 AURORA + LEGACY</span>
         </div>
       </div>
 

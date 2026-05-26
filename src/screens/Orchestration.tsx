@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type WheelEvent as ReactWheelEvent } from 'react'
 import { Link } from 'react-router-dom'
 import { getChaosColor } from '@theme/tokens'
 import { useChaosStore } from '@state/chaos'
@@ -120,6 +120,9 @@ interface AudioBands {
 const PERFORMANCE_START = Date.now()
 const BOARD_NODE_WIDTH = 250
 const BOARD_NODE_HEIGHT = 140
+const BOARD_MIN_ZOOM = 0.55
+const BOARD_MAX_ZOOM = 2.4
+const BOARD_WHEEL_ZOOM_SENSITIVITY = 0.0015
 
 const NODE_DEFS: Omit<BoardNode, 'activity' | 'expanded'>[] = [
   { id: 'ion', icon: '⬡', title: 'Ion AI Core', color: '#00f5ff', x: 52, y: 18, metrics: ['Inference/s', 'Context Tokens', 'Temp'], tag: 'CORE ROUTER' },
@@ -313,9 +316,12 @@ export default function Orchestration() {
   const [boardSize, setBoardSize] = useState({ width: 1, height: 1 })
   const [now, setNow] = useState(Date.now())
   const [pan, setPan] = useState({ x: 0, y: 0 })
+  const [zoom, setZoom] = useState(1)
   const [orchestrationConnected, setOrchestrationConnected] = useState(false)
 
   const boardRef = useRef<HTMLDivElement | null>(null)
+  const panRef = useRef(pan)
+  const zoomRef = useRef(zoom)
   const tasksThisMinute = useRef(0)
   const nextTaskId = useRef(1)
   const nextModuleId = useRef(1)
@@ -373,6 +379,8 @@ export default function Orchestration() {
   useEffect(() => { chaosRef.current = chaos }, [chaos])
   useEffect(() => { entropyRef.current = entropy }, [entropy])
   useEffect(() => { orchestrationConnectedRef.current = orchestrationConnected }, [orchestrationConnected])
+  useEffect(() => { panRef.current = pan }, [pan])
+  useEffect(() => { zoomRef.current = zoom }, [zoom])
 
   const triggerTaskSpawnFx = useCallback((nodeId: NodeId) => {
     const id = nextFxId.current++
@@ -534,7 +542,7 @@ export default function Orchestration() {
   })
 
   useEffect(() => {
-    document.title = 'OCTANE v5 — /orchestration'
+    document.title = 'OCTANE v6 — /orchestration'
   }, [])
 
   useEffect(() => {
@@ -589,8 +597,8 @@ export default function Orchestration() {
     panGestureRef.current = {
       startX: event.clientX,
       startY: event.clientY,
-      originX: pan.x,
-      originY: pan.y,
+      originX: panRef.current.x,
+      originY: panRef.current.y,
     }
     board.setPointerCapture(event.pointerId)
   }
@@ -606,6 +614,32 @@ export default function Orchestration() {
 
   const endBoardPan = () => {
     panGestureRef.current = null
+  }
+
+  const handleBoardWheel = (event: ReactWheelEvent<HTMLDivElement>) => {
+    event.preventDefault()
+    const board = boardRef.current
+    if (!board) return
+
+    const rect = board.getBoundingClientRect()
+    const pointerX = event.clientX - rect.left
+    const pointerY = event.clientY - rect.top
+    const currentZoom = zoomRef.current
+    const currentPan = panRef.current
+    const zoomFactor = Math.exp(-event.deltaY * BOARD_WHEEL_ZOOM_SENSITIVITY)
+    const nextZoom = Math.max(BOARD_MIN_ZOOM, Math.min(BOARD_MAX_ZOOM, currentZoom * zoomFactor))
+
+    if (Math.abs(nextZoom - currentZoom) < 0.0001) return
+
+    const worldX = (pointerX - currentPan.x) / currentZoom
+    const worldY = (pointerY - currentPan.y) / currentZoom
+    const nextPan = {
+      x: pointerX - worldX * nextZoom,
+      y: pointerY - worldY * nextZoom,
+    }
+
+    setZoom(nextZoom)
+    setPan(nextPan)
   }
 
   const beginNodeDrag = (event: ReactPointerEvent<HTMLDivElement>, id: NodeId) => {
@@ -631,8 +665,9 @@ export default function Orchestration() {
       const deltaX = clientX - gesture.startX
       const deltaY = clientY - gesture.startY
       gesture.moved = gesture.moved || Math.abs(deltaX) > 3 || Math.abs(deltaY) > 3
-      const nextX = clamp01((gesture.originX + (deltaX / rect.width) * 100) / 100) * 100
-      const nextY = clamp01((gesture.originY + (deltaY / rect.height) * 100) / 100) * 100
+      const zoomScale = Math.max(BOARD_MIN_ZOOM, zoomRef.current)
+      const nextX = clamp01((gesture.originX + (deltaX / (rect.width * zoomScale)) * 100) / 100) * 100
+      const nextY = clamp01((gesture.originY + (deltaY / (rect.height * zoomScale)) * 100) / 100) * 100
       nodeClickBlockRef.current = true
       setNodes(prev => prev.map(entry => entry.id === gesture.id ? { ...entry, x: nextX, y: nextY } : entry))
     }
@@ -686,8 +721,9 @@ export default function Orchestration() {
       const deltaX = clientX - gesture.startX
       const deltaY = clientY - gesture.startY
       gesture.moved = gesture.moved || Math.abs(deltaX) > 3 || Math.abs(deltaY) > 3
-      const nextX = clamp01((gesture.originX + (deltaX / rect.width) * 100) / 100) * 100
-      const nextY = clamp01((gesture.originY + (deltaY / rect.height) * 100) / 100) * 100
+      const zoomScale = Math.max(BOARD_MIN_ZOOM, zoomRef.current)
+      const nextX = clamp01((gesture.originX + (deltaX / (rect.width * zoomScale)) * 100) / 100) * 100
+      const nextY = clamp01((gesture.originY + (deltaY / (rect.height * zoomScale)) * 100) / 100) * 100
       moduleClickBlockRef.current = true
       setModules(prev => prev.map(entry => entry.id === gesture.id ? { ...entry, x: nextX, y: nextY } : entry))
     }
@@ -1053,9 +1089,11 @@ export default function Orchestration() {
             : node.id === 'cbe' || node.id === 'elx' || node.id === 'flow'
               ? bands.mid
               : bands.treble
+          const beatEnergy = audioBandsRef.current.beat
+          const pulseEnergy = audioBandsRef.current.pulse
           const nextPoint = clamp01(
-            0.22 + chaosValue * 0.44 + audioValue * 0.22 + entropyValue * 0.14 +
-            nodeBand * 0.28 + Math.random() * 0.34
+            0.22 + chaosValue * 0.44 + audioValue * 0.18 + entropyValue * 0.14 +
+            nodeBand * 0.28 + beatEnergy * 0.16 + pulseEnergy * 0.12 + Math.random() * 0.22
           ) * 100
           nextSeries[node.id] = [...current.slice(-27), nextPoint]
         })
@@ -1121,6 +1159,64 @@ export default function Orchestration() {
   const backendSequenceStep = Math.floor(realtimeNow / backendCadenceMs)
   const backendCycle = (realtimeNow % backendCadenceMs) / backendCadenceMs
   const backendPulse = backendReactiveConnected ? clamp01(Math.sin(backendCycle * Math.PI * 2) * 0.5 + 0.5) : 0
+  const musicBeatPhase = audioReactiveConnected ? (realtimeNow % beatDurationMs) / beatDurationMs : 0
+  const musicTempoPhase = audioReactiveConnected ? (realtimeNow % beatStepDurationMs) / beatStepDurationMs : 0
+  const musicTempoLock = clamp01(audioReactiveConnected ? (0.35 + effectiveAudioBeat * 0.45 + effectiveAudioPulse * 0.22) : 0)
+  const musicBassDrop = clamp01(Math.max(0, effectiveBass * 1.28 + effectiveAudioPulse * 0.28 + audioGlow * 0.18 - 0.24))
+  const musicNoteAccent = clamp01(Math.max(effectiveTreble * 0.92 + effectiveAudioPulse * 0.28 + (1 - musicBeatPhase) * 0.18))
+  const musicVelocity = clamp01(Math.max(effectiveAudioLevel * 0.68 + effectiveAudioPulse * 0.58 + musicBassDrop * 0.2))
+  const musicReactiveDrive = clamp01(musicTempoLock * 0.38 + musicBassDrop * 0.34 + musicNoteAccent * 0.22 + musicVelocity * 0.18)
+  const centerSparkEnergy = clamp01(
+    effectiveAudioBeat * 0.72 +
+    effectiveAudioPulse * 0.48 +
+    effectiveTreble * 0.42 +
+    effectiveAudioLevel * 0.22 +
+    livePressure * 0.16 +
+    musicBassDrop * 0.24 +
+    musicNoteAccent * 0.18
+  )
+  const centerSparkWindowMs = Math.max(96, Math.round(beatStepDurationMs * (0.58 - centerSparkEnergy * 0.16)))
+  const centerSparkStep = Math.floor(realtimeNow / centerSparkWindowMs)
+  const centerSparkCount = Math.round(14 + centerSparkEnergy * 26 + musicBassDrop * 4 + (audioReactiveConnected ? 4 : 0))
+
+  const centerSparks = useMemo(() => {
+    return Array.from({ length: centerSparkCount }, (_, index) => {
+      const baseSeed = centerSparkStep * 23.11 + index * 31.73 + sequencerEnergy * 17.9
+      const angle = hashNoise(baseSeed + 4.2) * Math.PI * 2
+      const lifeOffset = hashNoise(baseSeed + 6.4)
+      const progress = clamp01((realtimeNow % centerSparkWindowMs) / centerSparkWindowMs)
+      const life = clamp01(1 - ((progress + lifeOffset * (0.72 + musicBassDrop * 0.24)) % 1))
+      const jitter = hashNoise(baseSeed + 9.8)
+      const velocity = 0.58 + hashNoise(baseSeed + 2.3) * (0.82 + musicVelocity * 0.48)
+      const reach = 26 + hashNoise(baseSeed + 11.1) * (76 + centerSparkEnergy * 180 + musicBassDrop * 48)
+      const travel = (1 - life) * velocity
+      const x = Math.cos(angle) * reach * travel
+      const y = Math.sin(angle) * reach * travel
+      const length = 4 + (1 - life) * (10 + centerSparkEnergy * 24 + musicNoteAccent * 10)
+      const width = 1 + jitter * (1.5 + centerSparkEnergy * 1.5 + musicVelocity * 0.6)
+      const glow = 4 + centerSparkEnergy * 18 + musicBassDrop * 10 + jitter * 8
+      const opacity = clamp01((Math.pow(life, 0.42) * (0.35 + centerSparkEnergy * 0.76) + effectiveAudioBeat * 0.18 + musicNoteAccent * 0.14) * (0.72 + jitter * 0.45))
+      const mix = hashNoise(baseSeed + 14.7)
+      const r = Math.round(0 * (1 - mix) + 123 * mix)
+      const g = Math.round(245 * (1 - mix) + 255 * mix)
+      const b = Math.round(255 * (1 - mix) + 64 * mix)
+
+      return {
+        id: `${centerSparkStep}-${index}`,
+        x,
+        y,
+        angleDeg: (angle * 180) / Math.PI,
+        length,
+        width,
+        glow,
+        opacity,
+        color: `${r}, ${g}, ${b}`,
+      }
+    })
+  }, [centerSparkCount, centerSparkEnergy, centerSparkStep, centerSparkWindowMs, effectiveAudioBeat, musicBassDrop, musicNoteAccent, musicVelocity, realtimeNow, sequencerEnergy])
+
+  const centerSparkCoreOpacity = clamp01(0.2 + centerSparkEnergy * 0.56)
+  const centerSparkHaloOpacity = clamp01(0.08 + centerSparkEnergy * 0.24 + musicBassDrop * 0.12)
 
   const wireRippleLookup = useMemo(() => {
     const map = new Map<string, number>()
@@ -1334,17 +1430,19 @@ export default function Orchestration() {
             onPointerMove={moveBoardPan}
             onPointerUp={endBoardPan}
             onPointerLeave={endBoardPan}
+            onWheel={handleBoardWheel}
             style={{
               backgroundImage:
                 'radial-gradient(circle at 20% 20%, rgba(0,245,255,0.10), transparent 28%), radial-gradient(circle at 80% 0%, rgba(123,97,255,0.08), transparent 20%), linear-gradient(rgba(0,245,255,0.05) 1px, transparent 1px), linear-gradient(90deg, rgba(0,245,255,0.05) 1px, transparent 1px)',
               backgroundSize: 'auto, auto, 28px 28px, 28px 28px',
-              backgroundColor: `rgba(2,12,22,${0.88 - effectiveAudioLevel * 0.12})`,
-              boxShadow: `inset 0 0 ${18 + effectiveAudioLevel * 74}px rgba(0,245,255,${0.04 + effectiveAudioLevel * 0.18})`,
+              backgroundColor: `rgba(2,12,22,${0.88 - effectiveAudioLevel * 0.1 - musicVelocity * 0.04})`,
+              boxShadow: `inset 0 0 ${18 + effectiveAudioLevel * 58 + musicBassDrop * 34}px rgba(0,245,255,${0.04 + effectiveAudioLevel * 0.14 + musicReactiveDrive * 0.1})`,
             }}
           >
             <div className="pointer-events-none absolute inset-0 border border-white/5" />
-            <div className="pointer-events-none absolute inset-0" style={{ opacity: 0.38 + effectiveAudioLevel * 0.5, backgroundImage: 'linear-gradient(rgba(0,245,255,0.03) 1px, transparent 1px), linear-gradient(90deg, rgba(0,245,255,0.03) 1px, transparent 1px)', backgroundSize: '56px 56px' }} />
-            <div className="pointer-events-none absolute left-4 top-4 text-[8px] uppercase tracking-[0.24em] text-[var(--muted)]">Blueprint grid // pan canvas to inspect nodes</div>
+            <div className="pointer-events-none absolute inset-0" style={{ opacity: 0.36 + effectiveAudioLevel * 0.36 + musicTempoLock * 0.18, backgroundImage: 'linear-gradient(rgba(0,245,255,0.03) 1px, transparent 1px), linear-gradient(90deg, rgba(0,245,255,0.03) 1px, transparent 1px)', backgroundSize: '56px 56px' }} />
+            <div className="pointer-events-none absolute left-4 top-4 text-[8px] uppercase tracking-[0.24em] text-[var(--muted)]">Blueprint grid // drag to pan, scroll to zoom</div>
+            <div className="pointer-events-none absolute right-4 top-4 text-[8px] uppercase tracking-[0.22em] text-[var(--border2)] opacity-90">Zoom {Math.round(zoom * 100)}%</div>
             <div className="pointer-events-none absolute right-4 bottom-4 text-right text-[8px] uppercase tracking-[0.24em] text-[var(--border2)] opacity-80">Octane lattice board</div>
             <div
               className="pointer-events-none absolute left-1/2 top-1/2"
@@ -1353,11 +1451,11 @@ export default function Orchestration() {
               <div
                 className="h-[320px] w-[320px] rounded-full will-change-transform"
                 style={{
-                  opacity: 0.24 + audioBands.pulse * 0.48,
-                  transform: `scale(${1 + audioBands.pulse * 0.16})`,
+                  opacity: 0.24 + audioBands.pulse * 0.36 + musicBassDrop * 0.16,
+                  transform: `scale(${1 + audioBands.pulse * 0.12 + musicBassDrop * 0.08})`,
                   background:
-                    `radial-gradient(circle, rgba(0,245,255,${0.2 + audioBands.bass * 0.28}) 0%, rgba(123,97,255,${0.12 + audioBands.mid * 0.18}) 36%, rgba(0,255,170,${0.08 + audioBands.treble * 0.16}) 58%, transparent 72%)`,
-                  filter: `blur(${10 + audioBands.pulse * 10}px)`,
+                    `radial-gradient(circle, rgba(0,245,255,${0.2 + audioBands.bass * 0.22 + musicBassDrop * 0.18}) 0%, rgba(123,97,255,${0.12 + audioBands.mid * 0.16 + musicNoteAccent * 0.08}) 36%, rgba(0,255,170,${0.08 + audioBands.treble * 0.14 + musicVelocity * 0.08}) 58%, transparent 72%)`,
+                  filter: `blur(${10 + audioBands.pulse * 8 + musicBassDrop * 6}px)`,
                 }}
               />
             </div>
@@ -1368,20 +1466,71 @@ export default function Orchestration() {
               <div
                 className="h-[420px] w-[420px] rounded-full border motion-safe:animate-[spin_24s_linear_infinite] will-change-transform"
                 style={{
-                  borderColor: `rgba(0,245,255,${0.08 + audioBands.bass * 0.22})`,
-                  boxShadow: `0 0 80px rgba(0,245,255,${0.06 + audioBands.bass * 0.15})`,
-                  transform: `scale(${1 + audioBands.mid * 0.12})`,
-                  opacity: 0.32 + audioBands.mid * 0.24,
+                  borderColor: `rgba(0,245,255,${0.08 + audioBands.bass * 0.16 + musicTempoLock * 0.12})`,
+                  boxShadow: `0 0 80px rgba(0,245,255,${0.06 + audioBands.bass * 0.12 + musicVelocity * 0.12})`,
+                  transform: `scale(${1 + audioBands.mid * 0.09 + musicTempoLock * 0.06})`,
+                  opacity: 0.32 + audioBands.mid * 0.18 + musicTempoLock * 0.12,
                 }}
               />
             </div>
+            <div
+              className="pointer-events-none absolute left-1/2 top-1/2"
+              style={{ transform: 'translate3d(-50%, -50%, 0)' }}
+            >
+              <div
+                className="relative h-[560px] w-[560px]"
+                style={{ opacity: 0.76 + centerSparkEnergy * 0.2 + musicBassDrop * 0.12 }}
+              >
+                <div
+                  className="absolute left-1/2 top-1/2 rounded-full"
+                  style={{
+                    width: `${18 + centerSparkEnergy * 34}px`,
+                    height: `${18 + centerSparkEnergy * 34}px`,
+                    transform: 'translate(-50%, -50%)',
+                    background: `radial-gradient(circle, rgba(255,255,255,${0.3 + centerSparkCoreOpacity * 0.46 + musicNoteAccent * 0.1}) 0%, rgba(0,245,255,${0.2 + centerSparkCoreOpacity * 0.5 + musicBassDrop * 0.12}) 52%, rgba(123,97,255,0) 72%)`,
+                    boxShadow: `0 0 ${10 + centerSparkEnergy * 28 + musicBassDrop * 12}px rgba(0,245,255,${0.2 + centerSparkCoreOpacity * 0.48 + musicBassDrop * 0.14}), 0 0 ${8 + centerSparkEnergy * 18}px rgba(123,97,255,${0.12 + centerSparkCoreOpacity * 0.34 + musicNoteAccent * 0.12})`,
+                  }}
+                />
+                <div
+                  className="absolute left-1/2 top-1/2 rounded-full"
+                  style={{
+                    width: `${84 + centerSparkEnergy * 260 + musicBassDrop * 44}px`,
+                    height: `${84 + centerSparkEnergy * 260 + musicBassDrop * 44}px`,
+                    transform: `translate(-50%, -50%) scale(${0.72 + musicTempoPhase * 0.42 + centerSparkEnergy * 0.34 + musicBassDrop * 0.16})`,
+                    opacity: centerSparkHaloOpacity,
+                    background: `radial-gradient(circle, rgba(0,245,255,${0.2 + centerSparkEnergy * 0.28 + musicBassDrop * 0.14}) 0%, rgba(123,97,255,${0.12 + centerSparkEnergy * 0.22 + musicNoteAccent * 0.08}) 36%, rgba(0,255,170,0) 68%)`,
+                    filter: `blur(${6 + centerSparkEnergy * 12 + musicBassDrop * 6}px)`,
+                  }}
+                />
+                {centerSparks.map(spark => (
+                  <div
+                    key={spark.id}
+                    className="absolute left-1/2 top-1/2"
+                    style={{
+                      transform: `translate(calc(-50% + ${spark.x}px), calc(-50% + ${spark.y}px)) rotate(${spark.angleDeg}deg)`,
+                      opacity: spark.opacity,
+                    }}
+                  >
+                    <div
+                      className="rounded-full"
+                      style={{
+                        width: `${spark.length}px`,
+                        height: `${spark.width}px`,
+                        background: `linear-gradient(90deg, rgba(${spark.color}, 0), rgba(${spark.color}, ${0.95 + musicNoteAccent * 0.04}), rgba(255,255,255,0.94))`,
+                        boxShadow: `0 0 ${spark.glow}px rgba(${spark.color},${0.8 + musicBassDrop * 0.1}), 0 0 ${spark.glow * 0.55}px rgba(255,255,255,${0.62 + musicNoteAccent * 0.1})`,
+                      }}
+                    />
+                  </div>
+                ))}
+              </div>
+            </div>
             <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-center uppercase tracking-[0.22em] text-[rgba(0,245,255,0.035)]">
               <div>
-                <div className="text-[clamp(2.5rem,10vw,5rem)] font-bold leading-none">OCTANE v5</div>
+                <div className="text-[clamp(2.5rem,10vw,5rem)] font-bold leading-none">OCTANE v6</div>
                 <div className="mt-2 text-[10px]">/orchestration · stellar edition · ionirix llc</div>
               </div>
             </div>
-            <div className="absolute inset-0 will-change-transform" style={{ transform: `translate(${pan.x}px, ${pan.y}px)` }}>
+            <div className="absolute inset-0 will-change-transform" style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`, transformOrigin: '0 0' }}>
               <svg className="pointer-events-none absolute inset-0 h-full w-full overflow-visible">
                 {boardEdges.map((edge, index) => {
                   const start = {
@@ -1404,25 +1553,25 @@ export default function Orchestration() {
                   const particleProgressB = 0.16 + smoothstep(wirePhaseB % 1) * 0.68
                   const particleA = cubicPoint(start, control1, control2, end, particleProgressA)
                   const particleB = cubicPoint(start, control1, control2, end, particleProgressB)
-                  const beatCycle = (now % beatDurationMs) / beatDurationMs
-                  const beatPulse = audioReactiveConnected ? clamp01(Math.sin(beatCycle * Math.PI * 2) * 0.5 + 0.5) : 0
-                  const tempoFlash = clamp01(sequencerEnergy * 0.72 + beatPulse * 0.58)
+                  const beatPulse = audioReactiveConnected ? clamp01(Math.sin(musicBeatPhase * Math.PI * 2) * 0.5 + 0.5) : 0
+                  const tempoPulse = audioReactiveConnected ? clamp01(Math.sin(musicTempoPhase * Math.PI * 2) * 0.5 + 0.5) : 0
+                  const tempoFlash = clamp01(sequencerEnergy * 0.6 + beatPulse * 0.48 + tempoPulse * 0.3 + musicBassDrop * 0.18)
                   const bassNodeWeight = (edge.from.id === 'ion' || edge.from.id === 'src' || edge.from.id === 'sig' || edge.to.id === 'ion' || edge.to.id === 'src' || edge.to.id === 'sig') ? 1 : 0.58
-                  const bassLinePulse = clamp01(effectiveBass * bassNodeWeight + effectiveAudioPulse * 0.28)
+                  const bassLinePulse = clamp01(effectiveBass * bassNodeWeight + effectiveAudioPulse * 0.24 + musicBassDrop * 0.24)
                   const rippleStrength = wireRippleLookup.get(edgeId(edge.from.id, edge.to.id)) ?? 0
-                  const edgeStrokeWidth = 1.3 + bassLinePulse * 2.3 + tempoFlash * 1.15 + rippleStrength * 3.1 + taskPressure * 0.28
-                  const edgeStrokeOpacity = 0.2 + bassLinePulse * 0.2 + tempoFlash * 0.18 + rippleStrength * 0.48
+                  const edgeStrokeWidth = 1.3 + bassLinePulse * 2.3 + tempoFlash * 1.15 + rippleStrength * 3.1 + taskPressure * 0.28 + musicVelocity * 0.8
+                  const edgeStrokeOpacity = 0.2 + bassLinePulse * 0.2 + tempoFlash * 0.18 + rippleStrength * 0.48 + musicNoteAccent * 0.08
                   return (
                     <g key={`${edge.from.id}-${edge.to.id}`}>
                       <path d={`M ${start.x} ${start.y} C ${control1.x} ${control1.y}, ${control2.x} ${control2.y}, ${end.x} ${end.y}`} stroke={rippleStrength > 0.08 ? '#34d399' : edge.color} strokeOpacity={edgeStrokeOpacity} strokeWidth={edgeStrokeWidth} fill="none" />
                       {rippleStrength > 0.06 && (
                         <path d={`M ${start.x} ${start.y} C ${control1.x} ${control1.y}, ${control2.x} ${control2.y}, ${end.x} ${end.y}`} stroke="#86efac" strokeOpacity={0.25 + rippleStrength * 0.65} strokeWidth={1.2 + rippleStrength * 3.8} fill="none" />
                       )}
-                      <text x={(start.x + end.x) / 2} y={(start.y + end.y) / 2 - 4} fill={edge.color} fillOpacity={0.16 + tempoFlash * 0.2 + rippleStrength * 0.24} fontSize="8" textAnchor="middle">
+                      <text x={(start.x + end.x) / 2} y={(start.y + end.y) / 2 - 4} fill={edge.color} fillOpacity={0.16 + tempoFlash * 0.2 + rippleStrength * 0.24 + musicNoteAccent * 0.08} fontSize="8" textAnchor="middle">
                         {edge.label}
                       </text>
-                      <circle cx={particleA.x} cy={particleA.y} r={2 + bassLinePulse * 2.1 + livePressure + tempoFlash * 1.1 + rippleStrength * 1.8} fill={rippleStrength > 0.06 ? '#86efac' : edge.color} fillOpacity={0.58 + livePressure * 0.16 + tempoFlash * 0.2 + rippleStrength * 0.2} />
-                      <circle cx={particleB.x} cy={particleB.y} r={1.3 + bassLinePulse * 0.9 + taskPressure * 0.28 + tempoFlash * 0.65 + rippleStrength * 1.5} fill="white" fillOpacity={0.34 + logPressure * 0.12 + tempoFlash * 0.2 + rippleStrength * 0.2} />
+                      <circle cx={particleA.x} cy={particleA.y} r={2 + bassLinePulse * 2.1 + livePressure + tempoFlash * 1.1 + rippleStrength * 1.8 + musicBassDrop * 1.2} fill={rippleStrength > 0.06 ? '#86efac' : edge.color} fillOpacity={0.58 + livePressure * 0.16 + tempoFlash * 0.2 + rippleStrength * 0.2 + musicVelocity * 0.08} />
+                      <circle cx={particleB.x} cy={particleB.y} r={1.3 + bassLinePulse * 0.9 + taskPressure * 0.28 + tempoFlash * 0.65 + rippleStrength * 1.5 + musicNoteAccent * 0.8} fill="white" fillOpacity={0.34 + logPressure * 0.12 + tempoFlash * 0.2 + rippleStrength * 0.2 + musicNoteAccent * 0.1} />
                     </g>
                   )
                 })}
@@ -1436,6 +1585,7 @@ export default function Orchestration() {
                 const centerY = (node.y / 100) * boardSize.height + BOARD_NODE_HEIGHT / 2
                 const isComplete = effect.kind === 'complete'
                 const burstColor = isComplete ? '52, 211, 153' : '0, 245, 255'
+                const burstTempo = clamp01(musicBassDrop * 0.7 + musicNoteAccent * 0.3)
 
                 return (
                   <div
@@ -1446,18 +1596,18 @@ export default function Orchestration() {
                     <div
                       className="absolute rounded-full border"
                       style={{
-                        width: `${26 + progress * 122}px`,
-                        height: `${26 + progress * 122}px`,
-                        marginLeft: `${-(13 + progress * 61)}px`,
-                        marginTop: `${-(13 + progress * 61)}px`,
-                        borderColor: `rgba(${burstColor},${0.68 - progress * 0.52})`,
-                        boxShadow: `0 0 ${12 + progress * 38}px rgba(${burstColor},${0.32 - progress * 0.2})`,
-                        opacity: 0.88 - progress * 0.7,
+                        width: `${26 + progress * (122 + burstTempo * 30)}px`,
+                        height: `${26 + progress * (122 + burstTempo * 30)}px`,
+                        marginLeft: `${-(13 + progress * (61 + burstTempo * 15))}px`,
+                        marginTop: `${-(13 + progress * (61 + burstTempo * 15))}px`,
+                        borderColor: `rgba(${burstColor},${0.68 - progress * 0.52 + burstTempo * 0.08})`,
+                        boxShadow: `0 0 ${12 + progress * (38 + burstTempo * 16)}px rgba(${burstColor},${0.32 - progress * 0.2 + musicVelocity * 0.08})`,
+                        opacity: 0.88 - progress * 0.7 + burstTempo * 0.08,
                       }}
                     />
                     {Array.from({ length: 6 }).map((_, particleIndex) => {
-                      const angle = (Math.PI * 2 * particleIndex) / 6 + progress * 1.4
-                      const radius = 14 + progress * (isComplete ? 96 : 72)
+                      const angle = (Math.PI * 2 * particleIndex) / 6 + progress * (1.4 + burstTempo * 0.6)
+                      const radius = 14 + progress * ((isComplete ? 96 : 72) + musicBassDrop * 20)
                       const px = Math.cos(angle) * radius
                       const py = Math.sin(angle) * radius
                       return (
@@ -1469,9 +1619,9 @@ export default function Orchestration() {
                             height: `${3 + (isComplete ? 2 : 1)}px`,
                             marginLeft: `${px}px`,
                             marginTop: `${py}px`,
-                            background: `rgba(${burstColor},${0.9 - progress * 0.7})`,
-                            boxShadow: `0 0 ${8 + progress * 18}px rgba(${burstColor},${0.64 - progress * 0.4})`,
-                            opacity: 0.95 - progress * 0.75,
+                            background: `rgba(${burstColor},${0.9 - progress * 0.7 + musicNoteAccent * 0.08})`,
+                            boxShadow: `0 0 ${8 + progress * 18 + musicBassDrop * 8}px rgba(${burstColor},${0.64 - progress * 0.4 + musicVelocity * 0.08})`,
+                            opacity: 0.95 - progress * 0.75 + burstTempo * 0.04,
                           }}
                         />
                       )
@@ -1501,7 +1651,7 @@ export default function Orchestration() {
                     hopFlash = Math.max(hopFlash, decay * layer * slotVariance)
                   }
                 }
-                const audioPulse = audioReactiveConnected ? clamp01(Math.sin(beatCycle * Math.PI * 2) * 0.5 + 0.5) : 0
+                const audioPulse = audioReactiveConnected ? clamp01(Math.sin(musicBeatPhase * Math.PI * 2) * 0.5 + 0.5) : 0
                 const backendSelection = hashNoise(module.id * 19 + backendSequenceStep * 23 + logs.length * 7)
                 const hardAudioFlash = audioReactiveConnected && hopFlash > 0.16 ? 1 : 0
                 const hardBackendFlash = backendReactiveConnected && backendPulse > (0.7 - backendGlow * 0.16) && backendSelection > 0.58 ? 1 : 0
@@ -1510,17 +1660,17 @@ export default function Orchestration() {
                 const syncFlash = audioReactiveConnected
                   ? clamp01(hopFlash * (0.92 + audioPulse * 0.22))
                   : clamp01(backendFlashOn ? (0.72 + backendGlow * 0.24) : 0)
-                const backendBeat = backendReactiveConnected ? clamp01(backendPulse * (0.55 + backendGlow * 0.55)) : 0
-                const snareReactive = clamp01(Math.max(0, effectiveTreble * 1.28 + (effectiveTreble - effectiveMid) * 0.9 + effectiveAudioPulse * 0.22))
+                const backendBeat = backendReactiveConnected ? clamp01(backendPulse * (0.55 + backendGlow * 0.55) + musicTempoLock * 0.16) : 0
+                const snareReactive = clamp01(Math.max(0, effectiveTreble * 1.28 + (effectiveTreble - effectiveMid) * 0.9 + effectiveAudioPulse * 0.22 + musicNoteAccent * 0.18))
                 const snareGate = hashNoise(module.id * 131 + beatIndex * 17 + Math.floor(snareReactive * 100) * 7)
                 const snareBurst = snareReactive > 0.38 && snareGate > 0.86
                   ? clamp01((snareReactive - 0.38) * 1.9 + (snareGate - 0.86) * 2.8)
                   : 0
                 const proxyReactiveScale = isProxyModule ? 0.45 : 1
                 const snareBurstEffective = isProxyModule ? snareBurst * 0.18 : snareBurst
-                const reactiveSignal = clamp01(Math.max(syncFlash, audioPulse * 0.55, hopFlash * 0.72, backendBeat, snareBurstEffective) * proxyReactiveScale)
+                const reactiveSignal = clamp01(Math.max(syncFlash, audioPulse * 0.55, hopFlash * 0.72, backendBeat, snareBurstEffective, musicBassDrop, musicVelocity * 0.84) * proxyReactiveScale)
                 const flashVariance = 0.85 + hashNoise(module.id * 43 + beatIndex * 11 + backendSequenceStep * 5) * 0.45
-                const audioTempoFlash = audioReactiveConnected ? clamp01(audioPulse * 0.22 + hardAudioFlash * 0.98) : 0
+                const audioTempoFlash = audioReactiveConnected ? clamp01(audioPulse * 0.22 + hardAudioFlash * 0.98 + musicTempoLock * 0.32) : 0
                 const haloFlash = clamp01(Math.max(syncFlash * 0.6, audioTempoFlash) * flashVariance)
                 const reactiveGlowClass = !isProxyModule && reactiveSignal > 0.08 ? 'reactive-glow' : ''
                 const reactiveBorderClass = !isProxyModule && reactiveSignal > 0.12 ? 'reactive-border' : ''
@@ -1538,9 +1688,9 @@ export default function Orchestration() {
                 const borderFlashDurationMs = Math.round(Math.max(isProxyModule ? 520 : 240, beatDurationMs * (0.52 + hashNoise(module.id * 47 + beatIndex * 3) * (isProxyModule ? 0.25 : 0.46))))
                 const borderFlashDelayMs = Math.round(hashNoise(module.id * 71 + beatIndex * 11 + backendSequenceStep * 7) * 180)
                 const moduleBandSkew = hashNoise(module.id * 61 + beatIndex * 3.1 + backendSequenceStep * 0.45)
-                const moduleBass = clamp01(effectiveBass * (0.64 + moduleBandSkew * 0.46) + syncFlash * 0.12)
-                const moduleMid = clamp01(effectiveMid * (0.6 + (1 - moduleBandSkew) * 0.42) + syncFlash * 0.14)
-                const moduleTreble = clamp01(effectiveTreble * (0.56 + Math.abs(0.5 - moduleBandSkew) * 0.56) + syncFlash * 0.12)
+                const moduleBass = clamp01(effectiveBass * (0.64 + moduleBandSkew * 0.46) + syncFlash * 0.12 + musicBassDrop * 0.18)
+                const moduleMid = clamp01(effectiveMid * (0.6 + (1 - moduleBandSkew) * 0.42) + syncFlash * 0.14 + musicTempoLock * 0.12)
+                const moduleTreble = clamp01(effectiveTreble * (0.56 + Math.abs(0.5 - moduleBandSkew) * 0.56) + syncFlash * 0.12 + musicNoteAccent * 0.16)
                 const moduleBandTotal = Math.max(0.001, moduleBass + moduleMid + moduleTreble)
                 const bassMix = moduleBass / moduleBandTotal
                 const midMix = moduleMid / moduleBandTotal
@@ -1569,9 +1719,9 @@ export default function Orchestration() {
                     top: `${module.y}%`,
                     width: module.expanded ? '180px' : '136px',
                     borderColor: `rgba(${moduleCore},${0.06 + glowSignal * 0.92})`,
-                    boxShadow: `0 0 ${3 + glowSignal * 96 + snareDisplay * 34}px rgba(${moduleCore},${0.06 + glowSignal * 0.56 + snareDisplay * 0.16}), 0 0 ${2 + glowSignal * 70 + snareDisplay * 28}px rgba(${moduleAccent},${0.05 + glowSignal * 0.44 + snareDisplay * 0.2}), 0 0 ${1 + glowSignal * 30 + snareDisplay * 20}px rgba(255,255,255,${glowSignal * 0.26 + snareDisplay * 0.24})`,
-                    filter: `saturate(${0.92 + glowSignal * 0.48 + snareDisplay * 0.28}) brightness(${0.86 + glowSignal * 0.7 + snareDisplay * 0.3})`,
-                    transform: `scale(${1 + glowSignal * 0.05 + snareDisplay * 0.03})`,
+                    boxShadow: `0 0 ${3 + glowSignal * 96 + snareDisplay * 34 + musicVelocity * 16}px rgba(${moduleCore},${0.06 + glowSignal * 0.56 + snareDisplay * 0.16}), 0 0 ${2 + glowSignal * 70 + snareDisplay * 28}px rgba(${moduleAccent},${0.05 + glowSignal * 0.44 + snareDisplay * 0.2}), 0 0 ${1 + glowSignal * 30 + snareDisplay * 20}px rgba(255,255,255,${glowSignal * 0.26 + snareDisplay * 0.24})`,
+                    filter: `saturate(${0.92 + glowSignal * 0.48 + snareDisplay * 0.28 + musicTempoLock * 0.2}) brightness(${0.86 + glowSignal * 0.7 + snareDisplay * 0.3 + musicVelocity * 0.14})`,
+                    transform: `scale(${1 + glowSignal * 0.05 + snareDisplay * 0.03 + musicBassDrop * 0.02})`,
                     animationDuration: `${pulseDurationMs}ms`,
                     animationDelay: `${pulseDelayMs}ms`,
                     ['--border-flash-boost' as any]: `${0.75 + Math.max(borderPulseStrength, reactiveSignal) * 1.25}`,
@@ -1596,10 +1746,10 @@ export default function Orchestration() {
                   <div
                     className="pointer-events-none absolute -inset-3 rounded-md border"
                     style={{
-                      borderColor: `rgba(${moduleCore},${hopFlashDisplay * 0.88})`,
-                      boxShadow: `0 0 ${8 + hopFlashDisplay * 20}px rgba(${moduleCore},${hopFlashDisplay * 0.46}), 0 0 ${14 + hopFlashDisplay * 24}px rgba(${moduleAccent},${hopFlashDisplay * 0.28})`,
+                      borderColor: `rgba(${moduleCore},${hopFlashDisplay * 0.88 + musicBassDrop * 0.08})`,
+                      boxShadow: `0 0 ${8 + hopFlashDisplay * 20 + musicVelocity * 8}px rgba(${moduleCore},${hopFlashDisplay * 0.46}), 0 0 ${14 + hopFlashDisplay * 24}px rgba(${moduleAccent},${hopFlashDisplay * 0.28})`,
                       opacity: hopFlashDisplay,
-                      transform: `scale(${1 + hopFlashDisplay * 0.16})`,
+                      transform: `scale(${1 + hopFlashDisplay * 0.16 + musicVelocity * 0.03})`,
                       transition: 'opacity 120ms ease, transform 120ms ease, box-shadow 120ms ease',
                     }}
                   />
@@ -1611,9 +1761,9 @@ export default function Orchestration() {
                       bottom: '-150%',
                       left: '-150%',
                       background: `radial-gradient(circle at 28% 30%, rgba(${moduleCore},${haloFlashDisplay * 0.82}) 0%, rgba(${moduleCore},${haloFlashDisplay * 0.26}) 38%, transparent 76%), radial-gradient(circle at 70% 66%, rgba(${moduleAccent},${haloFlashDisplay * 0.72}) 0%, rgba(${moduleAccent},${haloFlashDisplay * 0.24}) 40%, transparent 78%), radial-gradient(circle at 52% 52%, rgba(255,255,255,${haloFlashDisplay * 0.34}) 0%, transparent 72%)`,
-                      opacity: 0.005 + haloFlashDisplay * 0.86,
-                      filter: `blur(${16 + haloFlashDisplay * 44}px)`,
-                      transform: `scale(${1 + haloFlashDisplay * 1.8})`,
+                      opacity: 0.005 + haloFlashDisplay * 0.86 + musicVelocity * 0.08,
+                      filter: `blur(${16 + haloFlashDisplay * 44 + musicBassDrop * 8}px)`,
+                      transform: `scale(${1 + haloFlashDisplay * 1.8 + musicBassDrop * 0.04})`,
                       transformOrigin: 'center',
                       mixBlendMode: 'screen',
                     }}
@@ -1621,18 +1771,18 @@ export default function Orchestration() {
                   <div
                     className="pointer-events-none absolute inset-0 rounded-md"
                     style={{
-                      background: `radial-gradient(circle at 30% 28%, rgba(${moduleCore},${0.1 + audioGlow * 0.12 + syncFlashDisplay * 0.34}) 0%, transparent 42%), radial-gradient(circle at 72% 70%, rgba(${moduleAccent},${0.06 + backendGlow * 0.12 + syncFlashDisplay * 0.26}) 0%, transparent 46%), radial-gradient(circle at 50% 50%, rgba(255,255,255,${0.03 + logPressure * 0.06 + syncFlashDisplay * 0.18}) 0%, transparent 62%), radial-gradient(circle at 48% 52%, rgba(255,255,255,${syncFlashDisplay * 0.34}) 0%, transparent 45%)`,
-                      opacity: 0.04 + backendGlow * 0.04 + syncFlashDisplay * 0.92,
+                      background: `radial-gradient(circle at 30% 28%, rgba(${moduleCore},${0.1 + audioGlow * 0.12 + syncFlashDisplay * 0.34 + musicBassDrop * 0.08}) 0%, transparent 42%), radial-gradient(circle at 72% 70%, rgba(${moduleAccent},${0.06 + backendGlow * 0.12 + syncFlashDisplay * 0.26 + musicNoteAccent * 0.08}) 0%, transparent 46%), radial-gradient(circle at 50% 50%, rgba(255,255,255,${0.03 + logPressure * 0.06 + syncFlashDisplay * 0.18}) 0%, transparent 62%), radial-gradient(circle at 48% 52%, rgba(255,255,255,${syncFlashDisplay * 0.34 + musicVelocity * 0.08}) 0%, transparent 45%)`,
+                      opacity: 0.04 + backendGlow * 0.04 + syncFlashDisplay * 0.92 + musicVelocity * 0.08,
                       mixBlendMode: 'screen',
                     }}
                   />
                   <div
                     className="pointer-events-none absolute inset-0 rounded-md border"
                     style={{
-                      borderColor: `rgba(${moduleCore},${0.04 + audioGlow * 0.08 + syncFlashDisplay * 0.84})`,
-                      boxShadow: `0 0 ${6 + audioGlow * 4 + syncFlashDisplay * 40}px rgba(${moduleCore},${0.05 + audioGlow * 0.08 + syncFlashDisplay * 0.34}), inset 0 0 ${4 + backendGlow * 4 + syncFlashDisplay * 18}px rgba(${moduleAccent},${0.02 + backendGlow * 0.05 + syncFlashDisplay * 0.16})`,
-                      opacity: 0.02 + audioGlow * 0.04 + syncFlashDisplay * 0.96,
-                      transform: `scale(${1 + audioGlow * 0.01 + syncFlashDisplay * 0.03})`,
+                      borderColor: `rgba(${moduleCore},${0.04 + audioGlow * 0.08 + syncFlashDisplay * 0.84 + musicBassDrop * 0.08})`,
+                      boxShadow: `0 0 ${6 + audioGlow * 4 + syncFlashDisplay * 40 + musicVelocity * 8}px rgba(${moduleCore},${0.05 + audioGlow * 0.08 + syncFlashDisplay * 0.34}), inset 0 0 ${4 + backendGlow * 4 + syncFlashDisplay * 18}px rgba(${moduleAccent},${0.02 + backendGlow * 0.05 + syncFlashDisplay * 0.16})`,
+                      opacity: 0.02 + audioGlow * 0.04 + syncFlashDisplay * 0.96 + musicVelocity * 0.06,
+                      transform: `scale(${1 + audioGlow * 0.01 + syncFlashDisplay * 0.03 + musicBassDrop * 0.02})`,
                     }}
                   />
                   <div
@@ -1684,8 +1834,8 @@ export default function Orchestration() {
                       ? effectiveMid
                       : effectiveTreble
                   const priorityFactor = IMPORTANT_NODE_IDS.has(node.id) ? 1.42 : 1
-                  const nodeReactive = clamp01(nodeBandHit * 0.78 + effectiveAudioPulse * 0.34 + centerDepth * 0.28 + completionFlash * 0.5)
-                  const nodeScale = 1 + nodeReactive * 0.05 * priorityFactor + completionFlash * 0.08
+                  const nodeReactive = clamp01(nodeBandHit * 0.74 + effectiveAudioPulse * 0.28 + centerDepth * 0.24 + completionFlash * 0.5 + musicNoteAccent * 0.16 + musicBassDrop * 0.12)
+                  const nodeScale = 1 + nodeReactive * 0.05 * priorityFactor + completionFlash * 0.08 + musicVelocity * 0.02
 
                   return (
                 <div
@@ -1695,8 +1845,8 @@ export default function Orchestration() {
                   style={{
                     ...percentPosition(node.x, node.y),
                     borderColor: completionFlash > 0.02 ? `${completionColor}${Math.round(80 + completionFlash * 70).toString(16).padStart(2, '0')}` : `${node.color}55`,
-                    boxShadow: `0 0 0 1px rgba(0,0,0,0.14), 0 0 ${16 + audioGlow * 14 + nodeReactive * 20 * priorityFactor}px ${node.color}1f, 0 0 ${10 + backendGlow * 15 + nodeReactive * 20}px rgba(0,245,255,${0.06 + backendGlow * 0.1 + nodeReactive * 0.16}), 0 0 ${completionFlash * 52}px rgba(52,211,153,${completionFlash * 0.62})`,
-                    filter: `saturate(${1 + audioGlow * 0.14 + nodeReactive * 0.3}) brightness(${1 + backendGlow * 0.05 + nodeReactive * 0.2})`,
+                    boxShadow: `0 0 0 1px rgba(0,0,0,0.14), 0 0 ${16 + audioGlow * 14 + nodeReactive * 20 * priorityFactor + musicVelocity * 10}px ${node.color}1f, 0 0 ${10 + backendGlow * 15 + nodeReactive * 20}px rgba(0,245,255,${0.06 + backendGlow * 0.1 + nodeReactive * 0.16}), 0 0 ${completionFlash * 52}px rgba(52,211,153,${completionFlash * 0.62})`,
+                    filter: `saturate(${1 + audioGlow * 0.14 + nodeReactive * 0.3 + musicTempoLock * 0.18}) brightness(${1 + backendGlow * 0.05 + nodeReactive * 0.2 + musicVelocity * 0.08})`,
                     transform: `scale(${nodeScale})`,
                     transformOrigin: '50% 50%',
                     cursor: 'grab',
@@ -1733,7 +1883,7 @@ export default function Orchestration() {
                     </div>
                     <div
                       className={`h-2.5 w-2.5 rounded-full ${node.activity > 0.7 ? 'bg-[var(--c3)]' : node.activity > 0.4 ? 'bg-[var(--warn)]' : 'bg-[var(--border2)]'}`}
-                      style={{ boxShadow: `0 0 ${8 + audioGlow * 14}px ${node.color}, 0 0 ${10 + backendGlow * 10}px rgba(0,245,255,${0.12 + backendGlow * 0.12})` }}
+                      style={{ boxShadow: `0 0 ${8 + audioGlow * 14 + musicBassDrop * 8}px ${node.color}, 0 0 ${10 + backendGlow * 10}px rgba(0,245,255,${0.12 + backendGlow * 0.12})` }}
                     />
                   </div>
                   <div className="px-3 py-2">
@@ -1751,12 +1901,12 @@ export default function Orchestration() {
                     </div>
                     <div className="mt-1 flex items-center gap-1">
                       <div className="h-1.5 flex-1 rounded-full bg-[var(--border)] overflow-hidden">
-                        <div className="h-full rounded-full transition-all" style={{ width: `${Math.max(8, node.activity * 100)}%`, background: `linear-gradient(90deg, ${node.color}, ${color})`, boxShadow: `0 0 ${8 + audioGlow * 12}px ${node.color}` }} />
+                        <div className="h-full rounded-full transition-all" style={{ width: `${Math.max(8, node.activity * 100)}%`, background: `linear-gradient(90deg, ${node.color}, ${color})`, boxShadow: `0 0 ${8 + audioGlow * 12 + musicVelocity * 8}px ${node.color}` }} />
                       </div>
-                      <div className="h-1.5 w-1.5 rounded-full bg-[var(--c1)]" style={{ opacity: 0.35 + audioGlow * 0.65, boxShadow: `0 0 ${10 + audioGlow * 12}px ${node.color}` }} />
+                      <div className="h-1.5 w-1.5 rounded-full bg-[var(--c1)]" style={{ opacity: 0.35 + audioGlow * 0.65 + musicNoteAccent * 0.08, boxShadow: `0 0 ${10 + audioGlow * 12 + musicBassDrop * 8}px ${node.color}` }} />
                     </div>
                     <div className="h-1.5 overflow-hidden rounded-full bg-[var(--border)]">
-                      <div className="h-full rounded-full" style={{ width: `${node.activity * 100}%`, background: `linear-gradient(90deg, ${node.color}, ${color})`, boxShadow: `0 0 ${6 + backendGlow * 10}px ${node.color}` }} />
+                      <div className="h-full rounded-full" style={{ width: `${node.activity * 100}%`, background: `linear-gradient(90deg, ${node.color}, ${color})`, boxShadow: `0 0 ${6 + backendGlow * 10 + musicVelocity * 8}px ${node.color}` }} />
                     </div>
                     {node.expanded && (
                       <div className="mt-2 rounded border border-[var(--border)] bg-black/20 p-2 text-[8px] leading-5 text-[var(--muted)]">

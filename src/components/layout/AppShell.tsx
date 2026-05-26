@@ -8,7 +8,7 @@ import { V5CommandDock } from './V5CommandDock'
 export function AppShell() {
   const [navOpen, setNavOpen] = useState(false)
   const location = useLocation()
-  const isV5Route = location.pathname === '/' || location.pathname.startsWith('/v5')
+  const isLegacyRoute = location.pathname === '/' || location.pathname.startsWith('/v5')
 
   useEffect(() => {
     setNavOpen(false)
@@ -29,7 +29,7 @@ export function AppShell() {
         <main className="flex-1 overflow-y-auto overflow-x-hidden p-2.5 md:p-3">
           <Outlet />
         </main>
-        {isV5Route && <V5CommandDock />}
+        {isLegacyRoute && <V5CommandDock />}
       </div>
     </div>
   )

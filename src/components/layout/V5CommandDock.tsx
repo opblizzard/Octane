@@ -37,7 +37,7 @@ export function V5CommandDock() {
         <div className="rounded border border-[var(--border)] bg-[var(--surface2)] p-3">
           <div className="flex items-center gap-2 text-[11px] uppercase tracking-widest text-[var(--accent)]">
             <Database size={12} />
-            V5 Command State
+            V6 Command State
           </div>
           <div className="mt-2 text-[10px] text-[var(--muted)]">Current page: {currentPage}</div>
           <div className="mt-2 flex flex-col gap-1.5">

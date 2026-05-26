@@ -1,0 +1,20 @@
+{
+  "colors": {
+    "wireframe": "#00e0ff",
+    "background": "#0a0f1c",
+    "grid": "rgba(0, 224, 255, 0.2)",
+    "nominal": "#10b981",
+    "degraded": "#f59e0b",
+    "critical": "#ef4444",
+    "atmosphere": "#2ad9ff",
+    "starfield": "#8edfff"
+  },
+  "rotationSpeed": 0.35,
+  "updateInterval": 1000,
+  "tileOpacity": 0.24,
+  "globeRadius": 1,
+  "minZoom": 1,
+  "maxZoom": 16,
+  "fogDensity": 0.12,
+  "telemetryBufferSize": 4
+}

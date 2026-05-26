@@ -29,7 +29,7 @@ export default function V5CommandCenter() {
       setHealth(h)
       setMetrics(m)
       savePageState('command-center', { health: h, metrics: m, lastAction })
-      recordHistory({ page: 'command-center', action: 'refresh', output: { health: h, metrics: m }, note: 'Command center state refreshed' })
+      recordHistory({ page: 'command-center', action: 'refresh', output: { health: h, metrics: m }, note: 'Command center state refreshed for Octane v6' })
     } finally {
       setLoading(false)
     }
@@ -59,7 +59,7 @@ export default function V5CommandCenter() {
       await apiPost('/api/engine/ignite', { initiatedBy: 'ui' })
       setLastAction('engine ignited')
       savePageState('command-center', { lastAction: 'engine ignited' })
-      recordHistory({ page: 'command-center', action: 'ignite-engine', input: { initiatedBy: 'ui' }, note: 'Ignition requested from v5 command center' })
+      recordHistory({ page: 'command-center', action: 'ignite-engine', input: { initiatedBy: 'ui' }, note: 'Ignition requested from Octane v6 command center' })
       await refresh()
     } catch (error) {
       setLastAction(error instanceof Error ? error.message : String(error))
@@ -72,7 +72,7 @@ export default function V5CommandCenter() {
       await apiPost('/api/engine/contain', { initiatedBy: 'ui' })
       setLastAction('containment acknowledged')
       savePageState('command-center', { lastAction: 'containment acknowledged' })
-      recordHistory({ page: 'command-center', action: 'contain-engine', input: { initiatedBy: 'ui' }, note: 'Containment requested from v5 command center' })
+      recordHistory({ page: 'command-center', action: 'contain-engine', input: { initiatedBy: 'ui' }, note: 'Containment requested from Octane v6 command center' })
       await refresh()
     } catch (error) {
       setLastAction(error instanceof Error ? error.message : String(error))
@@ -87,7 +87,7 @@ export default function V5CommandCenter() {
         ))}
       </div>
 
-      <Panel title="Engine Controls" subtitle="v5 command center">
+      <Panel title="Engine Controls" subtitle="v6 command center">
         <div className="flex flex-wrap gap-2 items-center">
           <Button onClick={() => void ignite()} loading={loading}>Ignite Engine</Button>
           <Button variant="outline" onClick={() => void contain()} loading={loading}>Emergency Contain</Button>
