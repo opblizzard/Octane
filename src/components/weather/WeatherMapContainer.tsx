@@ -41,6 +41,7 @@ type WeatherMapContainerProps = {
   radarOpacity: number
   loading?: boolean
   noDataMessage?: string | null
+  followSelectedStorm?: boolean
   onStormSelect: (stormId: string) => void
   onMapViewChange: (
     center: [number, number],
@@ -62,6 +63,7 @@ export function WeatherMapContainer({
   radarOpacity,
   loading = false,
   noDataMessage,
+  followSelectedStorm = true,
   onStormSelect,
   onMapViewChange,
 }: WeatherMapContainerProps) {
@@ -223,6 +225,27 @@ export function WeatherMapContainer({
       map.setView(mapView.center, mapView.zoom, { animate: false })
     }
   }, [mapView])
+
+  useEffect(() => {
+    if (!mapReady) return
+    const map = mapRef.current
+    const leaflet = leafletRef.current
+    if (!map || !leaflet || !followSelectedStorm || !selectedStormId || !stormsVisible) return
+
+    const selectedStorm = stormCells.find((storm) => storm.id === selectedStormId)
+    if (!selectedStorm || selectedStorm.polygon.length < 3) return
+
+    const stormBounds = leaflet.latLngBounds(selectedStorm.polygon)
+    const mapBounds = map.getBounds()
+
+    // Re-frame only when the selected storm is not already comfortably in-view.
+    if (!mapBounds.pad(-0.12).contains(stormBounds)) {
+      map.fitBounds(stormBounds.pad(0.55), {
+        animate: false,
+        maxZoom: 8,
+      })
+    }
+  }, [followSelectedStorm, mapReady, selectedStormId, stormCells, stormsVisible])
 
   useEffect(() => {
     if (!mapReady) return

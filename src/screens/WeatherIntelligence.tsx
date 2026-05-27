@@ -96,6 +96,7 @@ export default function WeatherIntelligence() {
   const [stormCells, setStormCells] = useState<WeatherStormCell[]>([])
   const [layerData, setLayerData] = useState<Partial<Record<WeatherEnvLayerType, WeatherLayerData>>>({})
   const [mode, setMode] = useState<'live' | 'history'>('live')
+  const [followSelectedStorm, setFollowSelectedStorm] = useState(true)
   const [, setLiveTick] = useState(0)
 
   const requestBbox = useMemo(() => {
@@ -393,6 +394,13 @@ export default function WeatherIntelligence() {
               </button>
               <button
                 type="button"
+                onClick={() => setFollowSelectedStorm((current) => !current)}
+                className="weather-control-btn"
+              >
+                {followSelectedStorm ? 'Follow Storm: On' : 'Follow Storm: Off'}
+              </button>
+              <button
+                type="button"
                 onClick={() => {
                   void refreshRadarFrames()
                   void refreshStormAndEnvLayers()
@@ -473,6 +481,7 @@ export default function WeatherIntelligence() {
               radarOpacity={layerOpacity.radar}
               loading={activeLayerLoading}
               noDataMessage={noDataMessage}
+              followSelectedStorm={followSelectedStorm}
               onStormSelect={setSelectedStormId}
               onMapViewChange={(center, zoom, bounds) => setMapView({ center, zoom, bounds })}
             />

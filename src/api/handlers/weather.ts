@@ -155,50 +155,18 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value))
 }
 
-function createSeedCellFromCenter(options: {
-  id: string
-  name: string
-  center: [number, number]
-  latRadius: number
-  lngRadius: number
-  speedKts: number
-  directionDeg: number
-  dbz: number
-  category: 'light' | 'moderate' | 'severe'
-  type?: 'storm' | 'hurricane'
-  hurricaneCategory?: 1 | 2 | 3 | 4 | 5
-}): {
-  id: string
-  name: string
-  type?: 'storm' | 'hurricane'
-  hurricaneCategory?: 1 | 2 | 3 | 4 | 5
-  base: Array<[number, number]>
-  centroid: [number, number]
-  speedKts: number
-  directionDeg: number
-  dbz: number
-  category: 'light' | 'moderate' | 'severe'
-} {
-  const [lat, lng] = options.center
-  const base: Array<[number, number]> = [
-    [lat + options.latRadius, lng - (options.lngRadius * 0.15)],
-    [lat + (options.latRadius * 0.2), lng + options.lngRadius],
-    [lat - options.latRadius, lng + (options.lngRadius * 0.15)],
-    [lat - (options.latRadius * 0.2), lng - options.lngRadius],
-  ]
-
-  return {
-    id: options.id,
-    name: options.name,
-    type: options.type,
-    hurricaneCategory: options.type === 'hurricane' ? options.hurricaneCategory : undefined,
-    base,
-    centroid: options.center,
-    speedKts: options.speedKts,
-    directionDeg: options.directionDeg,
-    dbz: options.dbz,
-    category: options.category,
-  }
+function isCentroidInBounds(
+  centroid: [number, number],
+  bounds: ViewportBounds,
+  options?: { latPad?: number; lngPad?: number },
+): boolean {
+  const latPad = options?.latPad ?? 0
+  const lngPad = options?.lngPad ?? 0
+  const [lat, lng] = centroid
+  return lat >= (bounds.south - latPad)
+    && lat <= (bounds.north + latPad)
+    && lng >= (bounds.west - lngPad)
+    && lng <= (bounds.east + lngPad)
 }
 
 function buildStormCells(timeIso: string, bounds?: ViewportBounds): StormCell[] {
@@ -321,58 +289,20 @@ function buildStormCells(timeIso: string, bounds?: ViewportBounds): StormCell[] 
     },
   ]
 
-  const viewportCells = bounds
+  const scopedSeed = bounds
     ? (() => {
       const latSpan = Math.max(2, bounds.north - bounds.south)
       const lngSpan = Math.max(3, bounds.east - bounds.west)
-      const baseLat = bounds.south + (latSpan * 0.52)
-      const baseLng = bounds.west + (lngSpan * 0.5)
-      const latRadius = clamp(latSpan * 0.1, 0.5, 2.1)
-      const lngRadius = clamp(lngSpan * 0.1, 0.8, 2.8)
+      const latPad = clamp(latSpan * 0.12, 0.7, 4.5)
+      const lngPad = clamp(lngSpan * 0.12, 1.1, 6)
 
-      return [
-        createSeedCellFromCenter({
-          id: 'storm-viewport-core',
-          name: 'Viewport Core Cell',
-          center: [baseLat, baseLng],
-          latRadius,
-          lngRadius,
-          speedKts: 30,
-          directionDeg: 62,
-          dbz: 47,
-          category: 'moderate',
-          type: 'storm',
-        }),
-        createSeedCellFromCenter({
-          id: 'storm-viewport-west',
-          name: 'Viewport Western Band',
-          center: [baseLat + (latSpan * 0.14), bounds.west + (lngSpan * 0.3)],
-          latRadius: latRadius * 0.92,
-          lngRadius: lngRadius * 0.95,
-          speedKts: 24,
-          directionDeg: 40,
-          dbz: 39,
-          category: 'light',
-          type: 'storm',
-        }),
-        createSeedCellFromCenter({
-          id: 'hurricane-viewport-track',
-          name: 'Hurricane Vesper',
-          center: [baseLat - (latSpan * 0.18), bounds.west + (lngSpan * 0.72)],
-          latRadius: latRadius * 1.15,
-          lngRadius: lngRadius * 1.1,
-          speedKts: 18,
-          directionDeg: 328,
-          dbz: 55,
-          category: 'severe',
-          type: 'hurricane',
-          hurricaneCategory: 2,
-        }),
-      ]
+      const inBounds = seed.filter((cell) => isCentroidInBounds(cell.centroid, bounds, { latPad, lngPad }))
+      // Keep returning real storms near the map edge so viewport tracking remains stable while panning.
+      return inBounds.length > 0 ? inBounds : seed
     })()
-    : []
+    : seed
 
-  return [...viewportCells, ...seed].map((cell, index) => {
+  return scopedSeed.map((cell, index) => {
     const polygon = cell.base.map(([lat, lng], pointIndex) => (
       shiftPoint(lat, lng, jitter + (index * 90), pointIndex * 0.8, pointIndex * 0.6)
     ))
