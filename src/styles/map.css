@@ -173,10 +173,243 @@
   animation-iteration-count: infinite, infinite;
 }
 
+.surveillance-map-canvas.surveillance-wireframes-hidden .surveillance-gridline,
+.surveillance-map-canvas.surveillance-wireframes-hidden .surveillance-continent-mesh,
+.surveillance-map-canvas.surveillance-wireframes-hidden .surveillance-mesh-node,
+.surveillance-map-canvas.surveillance-wireframes-hidden .surveillance-route-line,
+.surveillance-map-canvas.surveillance-wireframes-hidden .surveillance-audio-wire,
+.surveillance-map-canvas.surveillance-wireframes-hidden .surveillance-audio-dot,
+.surveillance-map-canvas.surveillance-wireframes-hidden .surveillance-audio-scatter-dot {
+  opacity: 0 !important;
+  stroke-opacity: 0 !important;
+  fill-opacity: 0 !important;
+}
+
 .surveillance-map-canvas .surveillance-alert-ring,
 .surveillance-map-canvas .surveillance-latency-ring {
   animation: surveillance-ring-pulse 1.8s ease-in-out infinite;
   transform-origin: center;
+}
+
+.surveillance-targeting-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 590;
+  pointer-events: none;
+  --target-audio-energy: 0.2;
+}
+
+.surveillance-targeting-banner,
+.surveillance-targeting-footer {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  border: 1px solid rgba(74, 244, 255, 0.35);
+  border-radius: 10px;
+  background: linear-gradient(180deg, rgba(2, 16, 35, 0.88), rgba(2, 10, 22, 0.75));
+  color: #64f4ff;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 8px 12px;
+  text-shadow: 0 0 12px rgba(79, 230, 255, 0.45);
+  backdrop-filter: blur(5px);
+}
+
+.surveillance-targeting-banner {
+  top: 12px;
+}
+
+.surveillance-targeting-footer {
+  bottom: 12px;
+  font-size: 10px;
+  letter-spacing: 0.1em;
+}
+
+.surveillance-target-lock {
+  position: absolute;
+}
+
+.surveillance-target-lock--resolved {
+  z-index: 2;
+}
+
+.surveillance-target-reticle {
+  position: absolute;
+  left: -27px;
+  top: -27px;
+  width: 54px;
+  height: 54px;
+  border-radius: 999px;
+  border: 2px solid color-mix(in srgb, var(--target-color) 92%, white 8%);
+  box-shadow:
+    0 0 22px color-mix(in srgb, var(--target-color) 62%, transparent),
+    inset 0 0 18px color-mix(in srgb, var(--target-color) 36%, transparent);
+  transform: rotate(var(--target-angle));
+  opacity: 0.86;
+}
+
+.surveillance-target-reticle-inner {
+  position: absolute;
+  inset: 9px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--target-color) 84%, white 16%);
+  opacity: 0.95;
+  animation: surveillance-target-inner-spin 1s linear infinite;
+}
+
+.surveillance-target-reticle-axis {
+  position: absolute;
+  background: color-mix(in srgb, var(--target-color) 86%, white 14%);
+  box-shadow: 0 0 12px color-mix(in srgb, var(--target-color) 55%, transparent);
+}
+
+.surveillance-target-reticle-axis-x {
+  left: 4px;
+  right: 4px;
+  top: 50%;
+  height: 1px;
+  transform: translateY(-50%);
+}
+
+.surveillance-target-reticle-axis-y {
+  top: 4px;
+  bottom: 4px;
+  left: 50%;
+  width: 1px;
+  transform: translateX(-50%);
+}
+
+.surveillance-target-reticle-bracket {
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  border: 2px solid color-mix(in srgb, var(--target-color) 88%, white 12%);
+}
+
+.surveillance-target-reticle-bracket-tl {
+  left: -7px;
+  top: -7px;
+  border-right: none;
+  border-bottom: none;
+}
+
+.surveillance-target-reticle-bracket-tr {
+  right: -7px;
+  top: -7px;
+  border-left: none;
+  border-bottom: none;
+}
+
+.surveillance-target-reticle-bracket-bl {
+  left: -7px;
+  bottom: -7px;
+  border-right: none;
+  border-top: none;
+}
+
+.surveillance-target-reticle-bracket-br {
+  right: -7px;
+  bottom: -7px;
+  border-left: none;
+  border-top: none;
+}
+
+.surveillance-target-link {
+  position: absolute;
+  top: -0.5px;
+  height: 1px;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--target-color) 92%, white 8%), transparent);
+  opacity: 0.8;
+}
+
+.surveillance-target-label {
+  position: absolute;
+  width: 218px;
+  border: 1px solid color-mix(in srgb, var(--target-color) 44%, #0f172a 56%);
+  border-radius: 10px;
+  background: linear-gradient(180deg, rgba(3, 14, 29, 0.9), rgba(2, 9, 20, 0.78));
+  padding: 8px 10px;
+  color: color-mix(in srgb, var(--target-color) 70%, white 30%);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  text-shadow: 0 0 10px color-mix(in srgb, var(--target-color) 45%, transparent);
+}
+
+.surveillance-target-title {
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1.2;
+}
+
+.surveillance-target-meta,
+.surveillance-target-threat,
+.surveillance-target-dwell {
+  font-size: 9px;
+  margin-top: 3px;
+  opacity: 0.95;
+}
+
+.surveillance-target-threat {
+  color: color-mix(in srgb, var(--target-color) 82%, white 18%);
+  font-weight: 700;
+}
+
+.surveillance-target-dwell {
+  opacity: 0.82;
+}
+
+.surveillance-target-lock--entry .surveillance-target-reticle {
+  animation: surveillance-target-entry 620ms ease-out forwards;
+}
+
+.surveillance-target-lock--entry .surveillance-target-reticle-inner {
+  animation-duration: 0.52s;
+}
+
+.surveillance-target-lock--acquire .surveillance-target-reticle {
+  animation: surveillance-target-acquire-spin 1.85s ease-in-out infinite;
+}
+
+.surveillance-target-lock--acquire .surveillance-target-reticle-inner {
+  animation-duration: 0.44s;
+}
+
+.surveillance-target-lock--dwell .surveillance-target-reticle {
+  animation: surveillance-target-dwell 1.9s ease-in-out infinite;
+}
+
+.surveillance-target-lock--dwell .surveillance-target-reticle-inner {
+  animation-duration: 1.7s;
+}
+
+.surveillance-target-lock--exit .surveillance-target-reticle {
+  animation: surveillance-target-exit 700ms ease-in forwards;
+}
+
+.surveillance-target-lock--exit .surveillance-target-label,
+.surveillance-target-lock--exit .surveillance-target-link {
+  animation: surveillance-target-label-exit 700ms ease-in forwards;
+}
+
+.surveillance-target-lock--resolved .surveillance-target-reticle {
+  animation: surveillance-target-resolved-flash 620ms ease-in-out forwards;
+}
+
+.surveillance-target-lock--resolved .surveillance-target-label {
+  border-color: rgba(255, 255, 255, 0.85);
+  color: #f3ffff;
+  box-shadow: 0 0 18px rgba(255, 255, 255, 0.36);
+}
+
+.surveillance-target-lock--resolved .surveillance-target-threat {
+  color: #f3ffff;
+}
+
+.surveillance-target-reticle,
+.surveillance-target-label {
+  filter: brightness(calc(0.88 + (var(--target-audio-energy) * 0.24)));
 }
 
 @keyframes surveillance-grid-dash {
@@ -209,9 +442,98 @@
   50% { opacity: 1; }
 }
 
+@keyframes surveillance-target-entry {
+  0% {
+    transform: scale(0.54) rotate(calc(var(--target-angle) - 24deg));
+    opacity: 0;
+  }
+  55% {
+    transform: scale(1.08) rotate(calc(var(--target-angle) + 8deg));
+    opacity: 0.95;
+  }
+  100% {
+    transform: scale(1) rotate(var(--target-angle));
+    opacity: 0.86;
+  }
+}
+
+@keyframes surveillance-target-acquire-spin {
+  0% {
+    transform: scale(0.92) rotate(calc(var(--target-angle) - 20deg));
+    opacity: 0.65;
+  }
+  45% {
+    transform: scale(1.05) rotate(calc(var(--target-angle) + 5deg));
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1) rotate(var(--target-angle));
+    opacity: 0.88;
+  }
+}
+
+@keyframes surveillance-target-dwell {
+  0%, 100% {
+    transform: scale(1) rotate(var(--target-angle));
+    opacity: 0.82;
+  }
+  50% {
+    transform: scale(1.035) rotate(calc(var(--target-angle) + 2deg));
+    opacity: 1;
+  }
+}
+
+@keyframes surveillance-target-exit {
+  from {
+    transform: scale(1) rotate(var(--target-angle));
+    opacity: 0.84;
+  }
+  to {
+    transform: scale(0.6) rotate(calc(var(--target-angle) + 28deg));
+    opacity: 0;
+  }
+}
+
+@keyframes surveillance-target-label-exit {
+  from { opacity: 0.9; }
+  to { opacity: 0; }
+}
+
+@keyframes surveillance-target-resolved-flash {
+  0% {
+    transform: scale(0.95) rotate(var(--target-angle));
+    opacity: 0.15;
+  }
+  35% {
+    transform: scale(1.1) rotate(calc(var(--target-angle) + 10deg));
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1) rotate(var(--target-angle));
+    opacity: 0;
+  }
+}
+
+@keyframes surveillance-target-inner-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
 @media (max-width: 768px) {
   .surveillance-surface--map {
     height: 100%;
     min-height: 300px;
+  }
+
+  .surveillance-targeting-banner,
+  .surveillance-targeting-footer {
+    font-size: 9px;
+    letter-spacing: 0.06em;
+    padding: 6px 8px;
+  }
+
+  .surveillance-target-label {
+    width: 176px;
+    padding: 6px 8px;
   }
 }

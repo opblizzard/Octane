@@ -6,6 +6,7 @@ type MapController = {
   setAltitude: (altitude: number) => void
   setAudioReactive: (enabled: boolean, level?: number, bands?: AudioReactiveBands) => void
   setWireframesVisible: (visible: boolean) => void
+  projectLatLng: (lat: number, lng: number) => { x: number; y: number } | null
   destroy: () => void
 }
 
@@ -321,22 +322,91 @@ export function initMap(container: HTMLElement, config: VisualizationConfig): Ma
   let motionStep = 0
   let wireframesVisible = true
 
-  const toggleLayer = (layer: L.LayerGroup, visible: boolean) => {
-    if (visible && !map.hasLayer(layer)) {
-      layer.addTo(map)
-      return
-    }
-    if (!visible && map.hasLayer(layer)) {
-      map.removeLayer(layer)
-    }
-  }
-
   const applyWireframeVisibility = (visible: boolean) => {
     wireframesVisible = visible
-    toggleLayer(gridLayer, visible)
-    toggleLayer(meshLayer, visible)
-    toggleLayer(reactiveMeshLayer, visible)
-    toggleLayer(connectionLayer, visible)
+    container.classList.toggle('surveillance-wireframes-hidden', !visible)
+
+    if (!visible) {
+      reactiveBursts.forEach((burst) => {
+        burst.line.remove()
+        burst.startDot.remove()
+        burst.endDot.remove()
+      })
+      reactiveBursts.length = 0
+
+      ambientAudioDots.forEach((entry) => {
+        entry.dot.setStyle({
+          opacity: 0.02,
+          fillOpacity: 0.015,
+        })
+      })
+
+      routeAudioProfiles.forEach((profile) => {
+        profile.line.setStyle({
+          opacity: 0,
+        })
+      })
+
+      gridAudioProfiles.forEach((profile) => {
+        profile.line.setStyle({
+          opacity: 0,
+        })
+      })
+
+      continentMeshLines.forEach((line) => {
+        line.setStyle({
+          opacity: 0,
+        })
+      })
+
+      continentMeshNodes.forEach((node) => {
+        node.setRadius(0.1)
+        node.setStyle({
+          fillOpacity: 0,
+          opacity: 0,
+        })
+      })
+    }
+
+    if (visible) {
+      gridAudioProfiles.forEach((profile) => {
+        profile.line.setStyle({
+          opacity: profile.baseOpacity,
+          weight: profile.baseWeight,
+        })
+      })
+
+      continentMeshLines.forEach((line, index) => {
+        line.setStyle({
+          opacity: index % 8 === 0 ? 0.72 : 0.4,
+          weight: index % 8 === 0 ? 1.45 : 0.95,
+        })
+      })
+
+      continentMeshNodes.forEach((node, index) => {
+        node.setRadius(index % 7 === 0 ? 3.8 : 2.3)
+        node.setStyle({
+          fillOpacity: 0.92,
+          opacity: 0.9,
+        })
+      })
+
+      routeAudioProfiles.forEach((profile) => {
+        profile.line.setStyle({
+          opacity: profile.baseOpacity,
+          weight: profile.baseWeight,
+        })
+      })
+
+      alertRingProfiles.forEach((profile) => {
+        profile.ring.setRadius(profile.baseRadius)
+        profile.ring.setStyle({
+          opacity: 0.85,
+          weight: 1.2,
+        })
+      })
+    }
+
   }
 
   triangulatedMeshSegments(NETWORK_POINTS).forEach(([start, end], index) => {
@@ -549,6 +619,10 @@ export function initMap(container: HTMLElement, config: VisualizationConfig): Ma
   }
 
   const updateReactiveMesh = () => {
+    if (!wireframesVisible) {
+      return
+    }
+
     motionStep += 1
     const skipPassiveFrame = !audioReactiveEnabled
       && reactiveBursts.length === 0
@@ -772,7 +846,9 @@ export function initMap(container: HTMLElement, config: VisualizationConfig): Ma
 
         const line = L.polyline(curvedRouteSegments([node.lat, node.lng], [target.lat, target.lng]), {
           color: routeColor(node, target, config),
-          opacity: riskLevel === 'critical' ? 0.72 : riskLevel === 'elevated' ? 0.56 : 0.44,
+          opacity: wireframesVisible
+            ? (riskLevel === 'critical' ? 0.72 : riskLevel === 'elevated' ? 0.56 : 0.44)
+            : 0,
           weight: riskLevel === 'critical' ? 1.9 : riskLevel === 'elevated' ? 1.5 : 1.15,
           className: 'surveillance-route-line',
         }).addTo(connectionLayer)
@@ -882,6 +958,11 @@ export function initMap(container: HTMLElement, config: VisualizationConfig): Ma
     },
     setWireframesVisible: (visible: boolean) => {
       applyWireframeVisibility(visible)
+    },
+    projectLatLng: (lat: number, lng: number) => {
+      const point = map.latLngToContainerPoint([lat, wrapLongitude(lng)])
+      if (!Number.isFinite(point.x) || !Number.isFinite(point.y)) return null
+      return { x: point.x, y: point.y }
     },
     destroy: () => {
       window.clearInterval(reactiveTimer)
