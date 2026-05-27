@@ -47,6 +47,7 @@ type SurveillanceAlert = {
   serverId?: string
   timestamp: number
   resolved: boolean
+  resolvedAt?: number
 }
 
 type PeaceMarker = {
@@ -114,6 +115,7 @@ const GLOBAL_EVENT_DOT_LEGEND: Array<{ category: GlobalEventCategory; label: str
 const CORE_REFRESH_MS = 5_000
 const ALERT_FEED_REFRESH_MS = 1_200
 const AUDIO_UI_COMMIT_MS = 64
+const FEED_TIMELINE_LIMIT = 96
 
 function normalizeAlertCategory(rawType: string): GlobalEventCategory {
   const value = rawType.trim().toLowerCase()
@@ -140,14 +142,14 @@ const FALLBACK_NODES: SurveillanceNode[] = [
   { id: 'uk-south-1', name: 'UK-SOUTH-1', country: 'United Kingdom', region: 'London, UK', lat: 51.5, lng: -0.12, status: 'NOMINAL', latencyMs: 16, loadPercent: 73, requestsPerMin: 19740, connections: ['eu-west-1', 'eu-central'] },
 ]
 
-function formatAgo(timestamp: number): string {
-  const minutes = Math.max(1, Math.round((Date.now() - timestamp) / 60000))
+function formatAgo(timestamp: number, now: number): string {
+  const minutes = Math.max(1, Math.round((now - timestamp) / 60000))
   return minutes === 1 ? '1 min ago' : `${minutes} mins ago`
 }
 
-function formatRelative(timestamp?: number): string {
+function formatRelative(timestamp: number | undefined, now: number): string {
   if (!timestamp) return 'fresh'
-  return formatAgo(timestamp)
+  return formatAgo(timestamp, now)
 }
 
 function clamp01(value: number): number {
@@ -158,6 +160,66 @@ function buildTargetResolveSummary(alert: SurveillanceAlert): string {
   const category = normalizeAlertCategory(alert.type)
   const scope = alert.serverId ? `Node ${alert.serverId}` : 'Global route surface'
   return `${scope} target lock is active for ${category} disturbance. Peaceful stabilization protocol is tracking this signal in real time.`
+}
+
+function mergeFeedTimeline(
+  existing: SurveillanceAlert[],
+  previousActiveById: Map<string, SurveillanceAlert>,
+  nextActiveById: Map<string, SurveillanceAlert>,
+  now: number,
+): SurveillanceAlert[] {
+  const timeline = [...existing]
+
+  nextActiveById.forEach((activeAlert, id) => {
+    const existingActiveIndex = timeline.findIndex((entry) => entry.id === id && !entry.resolved)
+    if (existingActiveIndex >= 0) {
+      // Keep original open timestamp so age reflects true time in-feed.
+      const originalTimestamp = timeline[existingActiveIndex].timestamp
+      timeline[existingActiveIndex] = {
+        ...timeline[existingActiveIndex],
+        ...activeAlert,
+        resolved: false,
+        timestamp: originalTimestamp,
+      }
+      return
+    }
+
+    timeline.unshift({
+      ...activeAlert,
+      resolved: false,
+      timestamp: Math.max(activeAlert.timestamp, now - 60_000),
+    })
+  })
+
+  previousActiveById.forEach((previousAlert, id) => {
+    if (nextActiveById.has(id)) return
+
+    const openIndex = timeline.findIndex((entry) => entry.id === id && !entry.resolved)
+    if (openIndex >= 0) {
+      timeline[openIndex] = {
+        ...timeline[openIndex],
+        resolved: true,
+        resolvedAt: now,
+      }
+      return
+    }
+
+    timeline.unshift({
+      ...previousAlert,
+      id: `${id}:resolved:${now}`,
+      resolved: true,
+      resolvedAt: now,
+      timestamp: now,
+    })
+  })
+
+  return timeline
+    .sort((left, right) => {
+      const leftEventAt = left.resolvedAt ?? left.timestamp
+      const rightEventAt = right.resolvedAt ?? right.timestamp
+      return rightEventAt - leftEventAt
+    })
+    .slice(0, FEED_TIMELINE_LIMIT)
 }
 
 function MapLegend({ altitude, refreshMs }: { altitude: number; refreshMs: number }) {
@@ -188,7 +250,7 @@ function Sparkline({ values, color }: { values: number[]; color: string }) {
     return `${x},${y}`
   }).join(' ')
   return (
-    <svg viewBox="0 0 100 100" className="h-10 w-full overflow-visible">
+    <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="h-10 w-full overflow-visible">
       <polyline fill="none" stroke={color} strokeWidth="3" points={points} vectorEffect="non-scaling-stroke" />
     </svg>
   )
@@ -197,12 +259,14 @@ function Sparkline({ values, color }: { values: number[]; color: string }) {
 export default function Surveillance() {
   const [snapshot, setSnapshot] = useState<SurveillanceSnapshot | null>(null)
   const [nodes, setNodes] = useState<SurveillanceNode[]>(FALLBACK_NODES)
-  const [alerts, setAlerts] = useState<SurveillanceAlert[]>([])
+  const [activeAlerts, setActiveAlerts] = useState<SurveillanceAlert[]>([])
+  const [feedAlerts, setFeedAlerts] = useState<SurveillanceAlert[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [altitude, setAltitude] = useState(78)
   const [focusedNodeId, setFocusedNodeId] = useState('us-east-1')
   const [lastSync, setLastSync] = useState<number>(Date.now())
+  const [clockNow, setClockNow] = useState<number>(Date.now())
   const [telemetrySamples, setTelemetrySamples] = useState<TelemetrySample[]>([])
   const [audioStatus, setAudioStatus] = useState('AUDIO OFF')
   const [audioLevel, setAudioLevel] = useState(0)
@@ -212,6 +276,7 @@ export default function Surveillance() {
   const [alertFeedClearedAt, setAlertFeedClearedAt] = useState<number>(0)
   const alertsRef = useRef<HTMLDivElement | null>(null)
   const reloadDataRef = useRef<(() => Promise<void>) | null>(null)
+  const activeAlertIndexRef = useRef<Map<string, SurveillanceAlert>>(new Map())
   const audioBandsRef = useRef<AudioBands>({ bass: 0, mid: 0, treble: 0, pulse: 0, beat: 0 })
   const audioRef = useRef<{
     context?: AudioContext
@@ -232,6 +297,13 @@ export default function Surveillance() {
   useEffect(() => {
     audioBandsRef.current = audioBands
   }, [audioBands])
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setClockNow(Date.now())
+    }, 1_000)
+    return () => window.clearInterval(timer)
+  }, [])
 
   const stopAudioReactive = useCallback(() => {
     const current = audioRef.current
@@ -371,7 +443,9 @@ export default function Surveillance() {
         if (!cancelled) {
           setError(err instanceof Error ? err.message : String(err))
           setNodes(FALLBACK_NODES)
-          setAlerts([])
+          setActiveAlerts([])
+          setFeedAlerts([])
+          activeAlertIndexRef.current = new Map()
           setPeaceMarkers([])
           setLastSync(Date.now())
         }
@@ -392,7 +466,6 @@ export default function Surveillance() {
   }, [])
 
   useEffect(() => {
-    const activeAlerts = alerts.filter((alert) => !alert.resolved)
     const weatherAlerts = activeAlerts.filter((alert) => normalizeAlertCategory(alert.type) === 'weather').length
     const trafficAlerts = activeAlerts.filter((alert) => normalizeAlertCategory(alert.type) === 'traffic').length
     const avgLoad = nodes.reduce((sum, node) => sum + node.loadPercent, 0) / Math.max(1, nodes.length)
@@ -405,25 +478,35 @@ export default function Surveillance() {
     }
 
     setTelemetrySamples((current) => [...current.slice(-119), liveSample])
-  }, [alerts, nodes])
+  }, [activeAlerts, nodes])
 
   useEffect(() => {
     let cancelled = false
 
     const loadAlerts = async () => {
       try {
-        const alertsResponse = await fetch('/api/v6/surveillance/alerts?onlyActive=false')
+        const alertsResponse = await fetch('/api/v6/surveillance/alerts?onlyActive=true')
         const alertsPayload = await alertsResponse.json() as ApiPayload<SurveillanceAlert[]>
-        const feed = [...(alertsPayload.data ?? [])].sort((left, right) => right.timestamp - left.timestamp)
+        const nextActiveAlerts = [...(alertsPayload.data ?? [])]
+          .filter((alert) => !alert.resolved)
+          .sort((left, right) => right.timestamp - left.timestamp)
+
+        const now = Date.now()
+        const previousActiveById = activeAlertIndexRef.current
+        const nextActiveById = new Map(nextActiveAlerts.map((alert) => [alert.id, alert]))
+        activeAlertIndexRef.current = nextActiveById
 
         if (!cancelled) {
-          setAlerts(feed)
+          setActiveAlerts(nextActiveAlerts)
+          setFeedAlerts((current) => mergeFeedTimeline(current, previousActiveById, nextActiveById, now))
           setLastSync(Date.now())
+          setError(null)
         }
       } catch (err) {
         if (!cancelled) {
           setError(err instanceof Error ? err.message : String(err))
-          setAlerts([])
+          setActiveAlerts([])
+          setFeedAlerts((current) => current)
         }
       } finally {
         if (!cancelled) setLoading(false)
@@ -442,13 +525,13 @@ export default function Surveillance() {
     emitTelemetryEvent('scene:focus', { focusedNodeId })
   }, [focusedNodeId])
 
-  const liveAlerts = alerts.filter((alert) => !alert.resolved)
+  const liveAlerts = activeAlerts
   const closureFeed = useMemo(() => {
-    const next = alerts
-      .filter((alert) => alert.timestamp >= alertFeedClearedAt)
-      .sort((left, right) => right.timestamp - left.timestamp)
+    const next = feedAlerts
+      .filter((alert) => (alert.resolvedAt ?? alert.timestamp) >= alertFeedClearedAt)
+      .sort((left, right) => (right.resolvedAt ?? right.timestamp) - (left.resolvedAt ?? left.timestamp))
     return next.slice(0, 32)
-  }, [alertFeedClearedAt, alerts])
+  }, [alertFeedClearedAt, feedAlerts])
   const liveCategoryCounts = useMemo(() => {
     return liveAlerts.reduce<Record<GlobalEventCategory, number>>((acc, alert) => {
       const category = normalizeAlertCategory(alert.type)
@@ -511,7 +594,7 @@ export default function Surveillance() {
 
   useEffect(() => {
     alertsRef.current?.scrollTo({ top: 0, behavior: 'smooth' })
-  }, [liveAlerts.length])
+  }, [closureFeed.length])
 
   const mapSubtitle = '2D Earth transit map with street-scale detail, closures, and live transport data.'
   const uptimeHours = useMemo(() => ((Date.now() - (snapshot?.timestamp ?? Date.now() - 1000 * 60 * 60 * 72)) / 3_600_000).toFixed(1), [snapshot])
@@ -673,7 +756,7 @@ export default function Surveillance() {
                     <div>
                       <div className="flex items-center gap-2">
                         <span className="text-[10px] uppercase tracking-[0.16em] text-[var(--accent)]">{alert.type}</span>
-                        <span className="text-[9px] text-[var(--muted)]">{formatRelative(alert.timestamp)}</span>
+                        <span className="text-[9px] text-[var(--muted)]">{formatRelative(alert.resolvedAt ?? alert.timestamp, clockNow)}</span>
                       </div>
                       <div className="mt-1 text-sm font-semibold text-[var(--text)]">{alert.title}</div>
                       <div className="mt-1 text-[11px] leading-5 text-[var(--muted)]">{alert.description}</div>
@@ -710,7 +793,7 @@ export default function Surveillance() {
                     {item.markerLabel
                       ? <span className="rounded border border-[var(--border)] bg-[var(--bg)] px-2 py-1">Marker {item.markerLabel}</span>
                       : <span className="rounded border border-[var(--border)] bg-[var(--bg)] px-2 py-1">Linked target</span>}
-                    <span className="rounded border border-[var(--border)] bg-[var(--bg)] px-2 py-1">{formatRelative(item.createdAt)}</span>
+                    <span className="rounded border border-[var(--border)] bg-[var(--bg)] px-2 py-1">{formatRelative(item.createdAt, clockNow)}</span>
                   </div>
                 </div>
               ))}
