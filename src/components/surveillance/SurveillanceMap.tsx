@@ -110,18 +110,7 @@ function targetColor(severity: VisualizationAlert['severity'], category: TargetC
   return '#4fe6ff'
 }
 
-function hashToPoint(id: string): { lat: number; lng: number } {
-  let hash = 0
-  for (let index = 0; index < id.length; index += 1) {
-    hash = ((hash << 5) - hash) + id.charCodeAt(index)
-    hash |= 0
-  }
-  const lat = -52 + (Math.abs(hash % 132))
-  const lng = -170 + (Math.abs((hash >> 3) % 340))
-  return { lat, lng }
-}
-
-function resolveAlertPoint(alert: VisualizationAlert, nodeById: Map<string, VisualizationNode>): { lat: number; lng: number } {
+function resolveAlertPoint(alert: VisualizationAlert, nodeById: Map<string, VisualizationNode>): { lat: number; lng: number } | null {
   if (typeof alert.lat === 'number' && typeof alert.lng === 'number') return { lat: alert.lat, lng: alert.lng }
   if (alert.location && typeof alert.location.lat === 'number' && typeof alert.location.lng === 'number') {
     return { lat: alert.location.lat, lng: alert.location.lng }
@@ -130,7 +119,7 @@ function resolveAlertPoint(alert: VisualizationAlert, nodeById: Map<string, Visu
     const node = nodeById.get(alert.serverId)
     if (node) return { lat: node.lat, lng: node.lng }
   }
-  return hashToPoint(`${alert.id}:${alert.type}`)
+  return null
 }
 
 function geoDistance(a: { lat: number; lng: number }, b: { lat: number; lng: number }): number {
@@ -141,10 +130,11 @@ function geoDistance(a: { lat: number; lng: number }, b: { lat: number; lng: num
 
 function pickDistributedTargets(alerts: VisualizationAlert[], nodes: VisualizationNode[]): Array<VisualizationAlert & { lat: number; lng: number; category: TargetCategory }> {
   const nodeById = new Map(nodes.map((node) => [node.id, node]))
-  let prioritized = alerts
+  const prioritized = alerts
     .filter((alert) => !alert.resolved)
     .map((alert) => {
       const point = resolveAlertPoint(alert, nodeById)
+      if (!point) return null
       return {
         ...alert,
         category: normalizeCategory(alert.type),
@@ -152,47 +142,14 @@ function pickDistributedTargets(alerts: VisualizationAlert[], nodes: Visualizati
         lng: point.lng,
       }
     })
+    .filter((alert): alert is VisualizationAlert & { lat: number; lng: number; category: TargetCategory } => alert !== null)
     .sort((left, right) => {
       const severityDelta = severityRank(right.severity) - severityRank(left.severity)
       if (severityDelta !== 0) return severityDelta
       return (right.timestamp ?? 0) - (left.timestamp ?? 0)
     })
 
-  if (prioritized.length === 0) {
-    prioritized = nodes
-      .slice()
-      .sort((left, right) => {
-        if (left.status !== right.status) {
-          return severityRank(
-            right.status === 'CRITICAL' || right.status === 'OFFLINE' ? 'CRITICAL' : right.status === 'DEGRADED' ? 'WARNING' : 'INFO',
-          )
-            - severityRank(
-              left.status === 'CRITICAL' || left.status === 'OFFLINE' ? 'CRITICAL' : left.status === 'DEGRADED' ? 'WARNING' : 'INFO',
-            )
-        }
-        return right.latencyMs - left.latencyMs
-      })
-      .slice(0, 4)
-      .map((node, index) => {
-        const fallbackSeverity: VisualizationAlert['severity'] = node.status === 'CRITICAL' || node.status === 'OFFLINE'
-          ? 'CRITICAL'
-          : node.status === 'DEGRADED'
-            ? 'WARNING'
-            : 'INFO'
-        const fallbackType = index % 3 === 0 ? 'TRAFFIC' : index % 3 === 1 ? 'SERVICE' : 'POLICE'
-        return {
-          id: `fallback-target-${node.id}`,
-          type: fallbackType,
-          severity: fallbackSeverity,
-          title: `${node.country} ${node.name}`,
-          timestamp: Date.now(),
-          resolved: false,
-          lat: node.lat,
-          lng: node.lng,
-          category: normalizeCategory(fallbackType),
-        }
-      })
-  }
+  if (prioritized.length === 0) return []
 
   const picked: Array<VisualizationAlert & { lat: number; lng: number; category: TargetCategory }> = []
   for (const candidate of prioritized) {

@@ -41,30 +41,40 @@ const SERVER_DEFS: Array<Omit<ServerNode, 'lastHeartbeat' | 'requestsPerMin' | '
 
 const SERVER_BASELINE = new Map(SERVER_DEFS.map((node) => [node.id, node]));
 
-const GLOBAL_EVENT_CENTERS: Array<{ key: string; type: SurveillanceAlert['type']; lat: number; lng: number; label: string }> = [
-  { key: 'na-west', type: 'TRAFFIC', lat: 37.6, lng: -122.3, label: 'North America West traffic mesh' },
-  { key: 'na-east', type: 'TRAFFIC', lat: 40.7, lng: -74.0, label: 'North America East traffic mesh' },
-  { key: 'sa-east', type: 'TRAFFIC', lat: -23.5, lng: -46.6, label: 'South America corridor pressure' },
-  { key: 'eu-core', type: 'TRAFFIC', lat: 50.1, lng: 8.7, label: 'Europe arterial congestion belt' },
-  { key: 'af-south', type: 'SERVICE', lat: -26.2, lng: 28.0, label: 'Southern Africa service reliability watch' },
-  { key: 'me-gulf', type: 'SERVICE', lat: 26.0, lng: 50.5, label: 'Gulf utility service impact zone' },
-  { key: 'india-west', type: 'TRAFFIC', lat: 19.1, lng: 72.9, label: 'India west megacity flow pressure' },
-  { key: 'sea-core', type: 'WEATHER', lat: 1.3, lng: 103.8, label: 'Southeast Asia weather disruption field' },
-  { key: 'japan-east', type: 'WEATHER', lat: 35.7, lng: 139.7, label: 'North Pacific weather front' },
-  { key: 'aus-east', type: 'WEATHER', lat: -33.8, lng: 151.2, label: 'Eastern Australia weather watch' },
-  { key: 'atlantic-lane', type: 'SERVICE', lat: 38.0, lng: -28.0, label: 'Transatlantic service corridor' },
-  { key: 'indian-ocean', type: 'SERVICE', lat: -12.0, lng: 74.0, label: 'Indian Ocean service corridor' },
-  { key: 'uk-security', type: 'POLICE', lat: 51.5, lng: -0.12, label: 'UK security advisory zone' },
-  { key: 'eu-security', type: 'POLICE', lat: 48.8, lng: 2.3, label: 'EU security advisory zone' },
-  { key: 'na-security', type: 'POLICE', lat: 34.0, lng: -118.2, label: 'North America security advisory zone' },
-  { key: 'east-asia-security', type: 'POLICE', lat: 35.0, lng: 127.0, label: 'East Asia security advisory zone' },
-  { key: 'geo-indo-pacific', type: 'GEOPOLITICAL', lat: 14.0, lng: 121.0, label: 'Indo-Pacific geopolitical pressure' },
-  { key: 'geo-europe', type: 'GEOPOLITICAL', lat: 52.0, lng: 20.0, label: 'Europe geopolitical pressure' },
-  { key: 'geo-americas', type: 'GEOPOLITICAL', lat: 23.0, lng: -102.0, label: 'Americas geopolitical pressure' },
-  { key: 'geo-africa', type: 'GEOPOLITICAL', lat: 6.0, lng: 20.0, label: 'Africa geopolitical pressure' },
-];
-
 const LIVE_TELEMETRY_REFRESH_MS = 2_000;
+const EXTERNAL_ALERT_REFRESH_MS = 5 * 60_000;
+const EXTERNAL_ALERT_FETCH_TIMEOUT_MS = 6_500;
+
+type UsgsFeature = {
+  id?: string
+  properties?: {
+    mag?: number | null
+    place?: string
+    time?: number
+    title?: string
+  }
+  geometry?: {
+    coordinates?: number[]
+  }
+}
+
+type UsgsFeed = {
+  features?: UsgsFeature[]
+}
+
+type EonetEvent = {
+  id?: string
+  title?: string
+  categories?: Array<{ id?: string | number; title?: string }>
+  geometry?: Array<{
+    date?: string
+    coordinates?: number[]
+  }>
+}
+
+type EonetFeed = {
+  events?: EonetEvent[]
+}
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
@@ -83,14 +93,27 @@ function midpointLongitude(a: number, b: number): number {
   return wrapLongitude((a + end) / 2);
 }
 
-function hashToUnit(value: string): number {
-  let hash = 0;
-  for (let index = 0; index < value.length; index += 1) {
-    hash = ((hash << 5) - hash) + value.charCodeAt(index);
-    hash |= 0;
+function resolveEonetType(category: string): SurveillanceAlert['type'] {
+  const normalized = category.trim().toLowerCase();
+  if (normalized.includes('storm') || normalized.includes('flood') || normalized.includes('wildfire') || normalized.includes('cyclone') || normalized.includes('volcano')) {
+    return 'WEATHER';
   }
-  const normalized = (hash >>> 0) % 10_000;
-  return normalized / 10_000;
+  if (normalized.includes('earthquake') || normalized.includes('landslide')) return 'SERVICE';
+  return 'GEOPOLITICAL';
+}
+
+function resolveEonetSeverity(category: string): SurveillanceAlert['severity'] {
+  const normalized = category.trim().toLowerCase();
+  if (normalized.includes('volcano') || normalized.includes('earthquake') || normalized.includes('wildfire')) return 'CRITICAL';
+  if (normalized.includes('storm') || normalized.includes('flood') || normalized.includes('landslide')) return 'WARNING';
+  return 'INFO';
+}
+
+function resolveEarthquakeSeverity(magnitude: number): SurveillanceAlert['severity'] {
+  if (magnitude >= 6.5) return 'EMERGENCY';
+  if (magnitude >= 5.5) return 'CRITICAL';
+  if (magnitude >= 4.5) return 'WARNING';
+  return 'INFO';
 }
 
 export class SurveillanceSystem {
@@ -98,9 +121,135 @@ export class SurveillanceSystem {
   private alerts: SurveillanceAlert[] = [];
   private mapState: MapViewState = DEFAULT_MAP_STATE;
   private lastTelemetryRefreshAt = 0;
+  private externalAlertsCache: SurveillanceAlert[] = [];
+  private externalAlertsFetchedAt = 0;
+  private externalAlertsInFlight: Promise<void> | null = null;
 
   constructor() {
     this.initializeNodes();
+    this.ensureExternalAlertsFresh();
+  }
+
+  private async fetchJsonWithTimeout<T>(url: string): Promise<T | null> {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), EXTERNAL_ALERT_FETCH_TIMEOUT_MS);
+
+    try {
+      const response = await fetch(url, {
+        signal: controller.signal,
+        headers: {
+          accept: 'application/json',
+          'user-agent': 'octane-surveillance/6.0',
+        },
+      });
+      if (!response.ok) return null;
+      return await response.json() as T;
+    } catch {
+      return null;
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  private async fetchUsgsEarthquakeAlerts(): Promise<SurveillanceAlert[]> {
+    const payload = await this.fetchJsonWithTimeout<UsgsFeed>('https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_day.geojson');
+    if (!payload?.features?.length) return [];
+
+    const alerts: SurveillanceAlert[] = [];
+    payload.features.slice(0, 20).forEach((feature) => {
+      const coordinates = feature.geometry?.coordinates;
+      if (!Array.isArray(coordinates) || coordinates.length < 2) return;
+
+      const lng = Number(coordinates[0]);
+      const lat = Number(coordinates[1]);
+      const depthKm = Number(coordinates[2] ?? 10);
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+
+      const magnitude = Number(feature.properties?.mag ?? 0);
+      const place = feature.properties?.place?.trim() || 'Unspecified location';
+      const timestamp = Number(feature.properties?.time ?? Date.now());
+      const id = feature.id ? `usgs-${feature.id}` : `usgs-${Math.round(timestamp)}-${Math.round(lat * 100)}`;
+
+      alerts.push({
+        id,
+        type: 'SERVICE',
+        severity: resolveEarthquakeSeverity(Number.isFinite(magnitude) ? magnitude : 0),
+        title: `USGS Earthquake M${(Number.isFinite(magnitude) ? magnitude : 0).toFixed(1)} · ${place}`,
+        description: `USGS confirmed seismic event. Depth ${Math.max(0, depthKm).toFixed(1)} km.`,
+        location: {
+          lat,
+          lng,
+          radius: Math.round(clamp(85_000 + (Math.max(0, magnitude) * 42_000), 90_000, 420_000)),
+        },
+        timestamp: Number.isFinite(timestamp) ? timestamp : Date.now(),
+        resolved: false,
+      });
+    });
+
+    return alerts;
+  }
+
+  private async fetchEonetAlerts(): Promise<SurveillanceAlert[]> {
+    const payload = await this.fetchJsonWithTimeout<EonetFeed>('https://eonet.gsfc.nasa.gov/api/v3/events?status=open&limit=30');
+    if (!payload?.events?.length) return [];
+
+    const alerts: SurveillanceAlert[] = [];
+    payload.events.forEach((event) => {
+      const latestGeometry = event.geometry?.at(-1);
+      const coordinates = latestGeometry?.coordinates;
+      if (!Array.isArray(coordinates) || coordinates.length < 2) return;
+
+      const lng = Number(coordinates[0]);
+      const lat = Number(coordinates[1]);
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+
+      const primaryCategory = event.categories?.[0]?.title ?? 'Natural Event';
+      const categoryLabel = primaryCategory.trim() || 'Natural Event';
+      const timestamp = latestGeometry?.date ? new Date(latestGeometry.date).getTime() : Date.now();
+      const id = event.id ? `eonet-${event.id}` : `eonet-${Math.round(timestamp)}-${Math.round(lng * 100)}`;
+
+      alerts.push({
+        id,
+        type: resolveEonetType(categoryLabel),
+        severity: resolveEonetSeverity(categoryLabel),
+        title: `NASA EONET · ${event.title ?? categoryLabel}`,
+        description: `Open natural event (${categoryLabel}) tracked by NASA EONET.`,
+        location: {
+          lat,
+          lng,
+          radius: 210_000,
+        },
+        timestamp: Number.isFinite(timestamp) ? timestamp : Date.now(),
+        resolved: false,
+      });
+    });
+
+    return alerts;
+  }
+
+  private ensureExternalAlertsFresh(): void {
+    const now = Date.now();
+    if (this.externalAlertsInFlight) return;
+    if ((now - this.externalAlertsFetchedAt) < EXTERNAL_ALERT_REFRESH_MS) return;
+
+    this.externalAlertsInFlight = (async () => {
+      const [usgsResult, eonetResult] = await Promise.allSettled([
+        this.fetchUsgsEarthquakeAlerts(),
+        this.fetchEonetAlerts(),
+      ]);
+
+      const next = [
+        ...(usgsResult.status === 'fulfilled' ? usgsResult.value : []),
+        ...(eonetResult.status === 'fulfilled' ? eonetResult.value : []),
+      ]
+        .sort((a, b) => b.timestamp - a.timestamp)
+        .slice(0, 48);
+
+      this.externalAlertsCache = next;
+      this.externalAlertsFetchedAt = Date.now();
+    })().finally(() => {
+      this.externalAlertsInFlight = null;
+    });
   }
 
   private initializeNodes(): void {
@@ -255,33 +404,6 @@ export class SurveillanceSystem {
       }
     }
 
-    const aggregateLoad = nodes.reduce((sum, node) => sum + node.loadPercent, 0) / Math.max(1, nodes.length);
-    const aggregateLatency = nodes.reduce((sum, node) => sum + node.latencyMs, 0) / Math.max(1, nodes.length);
-    const networkPressure = clamp((aggregateLoad / 100) * 0.58 + (aggregateLatency / 220) * 0.42, 0, 1);
-    const liveSignalBucket = Math.floor(now / 60_000);
-
-    GLOBAL_EVENT_CENTERS.forEach((entry, index) => {
-      const baseSignal = (Math.sin((liveSignalBucket * 0.57) + (index * 0.91)) + 1) / 2;
-      const bias = hashToUnit(`${entry.key}:${liveSignalBucket}`);
-      const activity = clamp((baseSignal * 0.55) + (bias * 0.2) + (networkPressure * 0.35), 0, 1);
-      if (activity < 0.54) return;
-
-      const latDrift = ((hashToUnit(`lat:${entry.key}:${liveSignalBucket}`) - 0.5) * 5.5);
-      const lngDrift = ((hashToUnit(`lng:${entry.key}:${liveSignalBucket}`) - 0.5) * 8.5);
-      const lat = clamp(entry.lat + latDrift, -67, 81);
-      const lng = wrapLongitude(entry.lng + lngDrift);
-
-      const id = `derived-global-${entry.key}-${liveSignalBucket}`;
-      derivedAlerts.push(this.createDerivedAlert(
-        id,
-        entry.type,
-        this.severityFromPressure(activity),
-        entry.label,
-        `Live global ${entry.type.toLowerCase()} signal active with pressure index ${(activity * 100).toFixed(0)}.`,
-        { lat, lng, radius: 240_000 },
-      ));
-    });
-
     return derivedAlerts;
   }
 
@@ -344,9 +466,14 @@ export class SurveillanceSystem {
 
   getUnifiedAlerts(onlyActive = true): SurveillanceAlert[] {
     this.refreshLiveTelemetry();
+    this.ensureExternalAlertsFresh();
     const manualAlerts = this.getAlerts(onlyActive);
     const derivedAlerts = this.getDerivedAlerts();
-    return [...manualAlerts, ...derivedAlerts]
+    const externalAlerts = onlyActive
+      ? this.externalAlertsCache.filter((alert) => !alert.resolved)
+      : [...this.externalAlertsCache];
+
+    return [...manualAlerts, ...derivedAlerts, ...externalAlerts]
       .sort((a, b) => {
         const rank = { EMERGENCY: 4, CRITICAL: 3, WARNING: 2, INFO: 1 };
         return (rank[b.severity] - rank[a.severity]) || (b.timestamp - a.timestamp);

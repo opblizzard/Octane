@@ -6,8 +6,7 @@ import {
   Server,
 } from 'lucide-react'
 import { SurveillanceMap } from '@/components/surveillance/SurveillanceMap'
-import visualizationConfig from '@/config/visualization.json'
-import { emitTelemetryEvent, startTelemetry, type TelemetrySample } from '@/modules/visualization/telemetry'
+import { emitTelemetryEvent, type TelemetrySample } from '@/modules/visualization/telemetry'
 import { Panel } from '@components/primitives/Panel'
 import { MetricCard } from '@components/primitives/MetricCard'
 import { StatusBadge } from '@components/primitives/StatusBadge'
@@ -138,6 +137,10 @@ function formatAgo(timestamp: number): string {
 function formatRelative(timestamp?: number): string {
   if (!timestamp) return 'fresh'
   return formatAgo(timestamp)
+}
+
+function clamp01(value: number): number {
+  return Math.max(0, Math.min(1, value))
 }
 
 function MapLegend({ altitude, refreshMs }: { altitude: number; refreshMs: number }) {
@@ -343,9 +346,23 @@ export default function Surveillance() {
         }
 
         if (!cancelled) {
+          const nextNodes = nodesPayload.data?.length ? nodesPayload.data : FALLBACK_NODES
+          const activeAlerts = freshAlerts.filter((alert) => !alert.resolved)
+          const weatherAlerts = activeAlerts.filter((alert) => normalizeAlertCategory(alert.type) === 'weather').length
+          const trafficAlerts = activeAlerts.filter((alert) => normalizeAlertCategory(alert.type) === 'traffic').length
+          const avgLoad = nextNodes.reduce((sum, node) => sum + node.loadPercent, 0) / Math.max(1, nextNodes.length)
+
+          const liveSample: TelemetrySample = {
+            timestamp: Date.now(),
+            alerts: activeAlerts.length,
+            traffic: clamp01((avgLoad / 100) * 0.76 + Math.min(trafficAlerts, 8) * 0.03),
+            weather: clamp01((weatherAlerts / Math.max(activeAlerts.length, 1)) * 0.9),
+          }
+
           setSnapshot(snapshotPayload.data ?? null)
-          setNodes(nodesPayload.data?.length ? nodesPayload.data : FALLBACK_NODES)
+          setNodes(nextNodes)
           setAlerts(freshAlerts)
+          setTelemetrySamples((current) => [...current.slice(-119), liveSample])
           setPeaceMarkers(nextMarkers)
           setError(null)
           setLastSync(Date.now())
@@ -372,24 +389,6 @@ export default function Surveillance() {
       window.clearInterval(timer)
       reloadDataRef.current = null
     }
-  }, [])
-
-  useEffect(() => {
-    const seededSeries = Array.from({ length: 60 }, (_, index) => {
-      const offset = 60 - index
-      return {
-        timestamp: Date.now() - (offset * visualizationConfig.updateInterval),
-        alerts: Math.max(0, Math.round(2 + Math.sin(index / 8) * 1.5)),
-        traffic: 0.44 + Math.sin(index / 6) * 0.16,
-        weather: 0.36 + Math.cos(index / 7) * 0.14,
-      }
-    })
-    setTelemetrySamples(seededSeries)
-
-    const stopTelemetry = startTelemetry((sample) => {
-      setTelemetrySamples((current) => [...current.slice(-119), sample])
-    }, visualizationConfig.updateInterval, visualizationConfig.telemetryBufferSize)
-    return stopTelemetry
   }, [])
 
   useEffect(() => {
