@@ -49,6 +49,108 @@
   color: #f59e0b;
 }
 
+.weather-smoke-cursor-tooltip {
+  border: 1px solid rgba(168, 85, 247, 0.55);
+  border-radius: 0.45rem;
+  background: rgba(12, 8, 25, 0.92);
+  color: #e9d5ff;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 0.22rem 0.38rem;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.3);
+}
+
+.weather-pressure-front {
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  filter: drop-shadow(0 0 3px rgba(245, 158, 11, 0.35));
+}
+
+.weather-isobar-line {
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.weather-front-line {
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.weather-front-line--warm {
+  filter: drop-shadow(0 0 2px rgba(225, 29, 72, 0.35));
+}
+
+.weather-front-line--cold {
+  filter: drop-shadow(0 0 2px rgba(14, 165, 233, 0.35));
+}
+
+.weather-pressure-vector {
+  stroke-dasharray: 3 6;
+}
+
+.weather-wind-line,
+.weather-wind-arrowhead {
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.weather-isobar-label-host,
+.weather-front-symbol-host,
+.weather-pressure-center-host {
+  background: transparent;
+  border: 0;
+}
+
+.weather-isobar-label {
+  color: #585f68;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.6);
+}
+
+.weather-front-symbol {
+  display: block;
+  transform-origin: center center;
+}
+
+.weather-front-symbol--cold {
+  width: 0;
+  height: 0;
+  border-left: 8px solid transparent;
+  border-right: 8px solid transparent;
+  border-bottom: 12px solid #0ea5e9;
+  filter: drop-shadow(0 0 2px rgba(14, 165, 233, 0.35));
+}
+
+.weather-front-symbol--warm {
+  width: 16px;
+  height: 8px;
+  border: 3px solid #e11d48;
+  border-bottom: 0;
+  border-radius: 999px 999px 0 0;
+  box-sizing: border-box;
+  filter: drop-shadow(0 0 2px rgba(225, 29, 72, 0.35));
+}
+
+.weather-pressure-center {
+  display: inline-block;
+  font-size: 42px;
+  font-weight: 800;
+  line-height: 0.75;
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.5);
+}
+
+.weather-pressure-center--high {
+  color: #335f9f;
+}
+
+.weather-pressure-center--low {
+  color: #dc2626;
+}
+
 .weather-map-loading {
   position: absolute;
   top: 0.75rem;

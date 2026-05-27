@@ -91,10 +91,11 @@ async function fetchRainViewerFrames(fromIso: string, toIso: string): Promise<Ra
 
     const payload = await response.json() as RainViewerMapsResponse;
     const host = typeof payload.host === 'string' ? payload.host : 'https://tilecache.rainviewer.com';
-    const candidates = [
-      ...(Array.isArray(payload.radar?.past) ? payload.radar?.past : []),
-      ...(Array.isArray(payload.radar?.nowcast) ? payload.radar?.nowcast : []),
-    ]
+    const pastFrames = Array.isArray(payload.radar?.past) ? payload.radar?.past : []
+    const nowcastFrames = Array.isArray(payload.radar?.nowcast) ? payload.radar?.nowcast : []
+
+    // Prefer observed radar (past) so map never shows nowcast vector overlays or unsupported zoom placeholders.
+    const candidates = (pastFrames.length > 0 ? pastFrames : nowcastFrames)
       .filter((entry): entry is RainViewerFrame => {
         return typeof entry?.time === 'number' && typeof entry?.path === 'string';
       })
