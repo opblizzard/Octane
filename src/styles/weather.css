@@ -10,7 +10,14 @@
 
 .weather-map-canvas {
   width: 100%;
-  height: clamp(320px, 56vh, 640px);
+  height: clamp(460px, 72vh, 900px);
+}
+
+.weather-map-canvas .leaflet-container,
+.weather-map-canvas .leaflet-pane,
+.weather-map-canvas .leaflet-tile,
+.weather-map-canvas .leaflet-image-layer {
+  backface-visibility: hidden;
 }
 
 .weather-radar-tile {
@@ -94,6 +101,140 @@
 .weather-wind-arrowhead {
   stroke-linecap: round;
   stroke-linejoin: round;
+}
+
+.weather-cloud-radar-point,
+.weather-storm-cloud-radar-point,
+.weather-hurricane-edge-band,
+.weather-hurricane-mid-band {
+  filter: blur(0.25px);
+}
+
+.weather-cloud-patch,
+.weather-storm-cloud-patch,
+.weather-hurricane-edge-band-patch,
+.weather-hurricane-mid-band-patch,
+.weather-cloud-patch-inner {
+  filter: blur(2.4px);
+}
+
+.weather-cloud-patch {
+  mix-blend-mode: normal;
+}
+
+.weather-storm-cloud-patch,
+.weather-hurricane-mid-band-patch {
+  mix-blend-mode: normal;
+}
+
+.weather-cloud-patch-inner {
+  mix-blend-mode: normal;
+}
+
+.weather-cloud-radar-point {
+  mix-blend-mode: screen;
+}
+
+.weather-cloud-tile {
+  filter: grayscale(0.08) contrast(1.08) brightness(1.2) saturate(0.92);
+  mix-blend-mode: screen;
+}
+
+.weather-cloud-raster {
+  filter: contrast(1.06) brightness(1.05) saturate(0.94);
+  mix-blend-mode: screen;
+}
+
+.weather-storm-cloud-raster {
+  filter: contrast(1.14) brightness(1.02) saturate(1.06);
+  mix-blend-mode: screen;
+}
+
+.weather-storm-cloud-tile {
+  filter: grayscale(0.06) contrast(1.2) brightness(1.12) saturate(1.02);
+  mix-blend-mode: screen;
+}
+
+.weather-storm-cloud-radar-point,
+.weather-hurricane-mid-band {
+  mix-blend-mode: multiply;
+}
+
+.weather-hurricane-rain-stream {
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 4 5;
+}
+
+.weather-hurricane-funnel-track {
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  filter: drop-shadow(0 0 2px rgba(55, 65, 81, 0.5));
+}
+
+.weather-hurricane-model-track {
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  filter: drop-shadow(0 0 2px rgba(2, 6, 23, 0.35));
+}
+
+.weather-hurricane-model-label-host,
+.weather-hurricane-eye-host {
+  background: transparent;
+  border: 0;
+}
+
+.weather-hurricane-model-label {
+  display: inline-block;
+  font-size: 13px;
+  font-weight: 900;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  text-shadow: 0 1px 2px rgba(2, 6, 23, 0.78);
+}
+
+.weather-hurricane-eye-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  font-size: 24px;
+  line-height: 1;
+  text-shadow: 0 0 8px rgba(56, 189, 248, 0.5);
+}
+
+.weather-lightning-icon-host {
+  background: transparent;
+  border: 0;
+}
+
+.weather-lightning-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  font-size: 15px;
+  line-height: 1;
+  color: #fde047;
+  text-shadow: 0 0 6px rgba(250, 204, 21, 0.65);
+  animation: weather-lightning-pulse 1.6s ease-in-out infinite;
+}
+
+.weather-lightning-pulse {
+  filter: drop-shadow(0 0 5px rgba(250, 204, 21, 0.35));
+}
+
+@keyframes weather-lightning-pulse {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 0.9;
+  }
+  50% {
+    transform: scale(1.1);
+    opacity: 1;
+  }
 }
 
 .weather-isobar-label-host,
@@ -328,6 +469,6 @@
 
 @media (max-width: 768px) {
   .weather-map-canvas {
-    height: min(64vh, 440px);
+    height: min(72vh, 620px);
   }
 }

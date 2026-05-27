@@ -12,7 +12,16 @@ import { useWeatherStore } from '@state/weather'
 
 const RADAR_WINDOW_HOURS = 24
 const RADAR_STEP_MINUTES = 10
-const ENV_TYPES: WeatherEnvLayerType[] = ['precipitation', 'wind', 'pressure', 'smoke']
+const ENV_TYPES: WeatherEnvLayerType[] = [
+  'precipitation',
+  'wind',
+  'pressure',
+  'smoke',
+  'cloudCoverage',
+  'stormCloudCoverage',
+  'hurricaneRainRadar',
+  'lightningTracking',
+]
 const TIMELINE_DEBOUNCE_MS = 160
 const LIVE_REFRESH_MS = 10_000
 
@@ -96,7 +105,7 @@ export default function WeatherIntelligence() {
   const [stormCells, setStormCells] = useState<WeatherStormCell[]>([])
   const [layerData, setLayerData] = useState<Partial<Record<WeatherEnvLayerType, WeatherLayerData>>>({})
   const [mode, setMode] = useState<'live' | 'history'>('live')
-  const [followSelectedStorm, setFollowSelectedStorm] = useState(true)
+  const [followSelectedStorm, setFollowSelectedStorm] = useState(false)
   const [, setLiveTick] = useState(0)
 
   const requestBbox = useMemo(() => {
@@ -173,18 +182,39 @@ export default function WeatherIntelligence() {
       setLayerLoading(type, true)
       setLayerError(type, null)
       try {
-        const nextData = await weatherDataService.getLayerData({ type, time: targetTime, bbox: requestBbox })
-        setLayerData((current) => ({ ...current, [type]: nextData }))
-        if (hasLayerPayload(nextData)) {
-          setLastKnownEnvLayer(type, nextData)
+        return {
+          type,
+          data: await weatherDataService.getLayerData({ type, time: targetTime, bbox: requestBbox }),
         }
-        setLayerStale(type, Boolean(nextData.stale))
       } catch (error) {
         setLayerError(type, error instanceof Error ? error.message : `Failed to load ${type} layer`)
+        return {
+          type,
+          data: undefined,
+        }
       } finally {
         setLayerLoading(type, false)
       }
-    }))
+    })).then((results) => {
+      const nextLayerEntries = results.filter((result): result is { type: WeatherEnvLayerType; data: WeatherLayerData } => Boolean(result.data))
+
+      if (nextLayerEntries.length === 0) return
+
+      nextLayerEntries.forEach((result) => {
+        if (hasLayerPayload(result.data)) {
+          setLastKnownEnvLayer(result.type, result.data)
+        }
+        setLayerStale(result.type, Boolean(result.data.stale))
+      })
+
+      setLayerData((current) => {
+        const next = { ...current }
+        nextLayerEntries.forEach((result) => {
+          next[result.type] = result.data
+        })
+        return next
+      })
+    })
   }, [requestBbox, selectedStormId, selectedTime, setLastKnownEnvLayer, setLastKnownStorms, setLayerError, setLayerLoading, setLayerStale, setSelectedStormId])
 
   useEffect(() => {
@@ -274,6 +304,10 @@ export default function WeatherIntelligence() {
     status.loadingByLayer.wind,
     status.loadingByLayer.pressure,
     status.loadingByLayer.smoke,
+    status.loadingByLayer.cloudCoverage,
+    status.loadingByLayer.stormCloudCoverage,
+    status.loadingByLayer.hurricaneRainRadar,
+    status.loadingByLayer.lightningTracking,
   ])
 
   const envVisibility = useMemo(() => ({
@@ -281,14 +315,22 @@ export default function WeatherIntelligence() {
     wind: activeLayers.wind,
     pressure: activeLayers.pressure,
     smoke: activeLayers.smoke,
-  }), [activeLayers.precipitation, activeLayers.pressure, activeLayers.smoke, activeLayers.wind])
+    cloudCoverage: activeLayers.cloudCoverage,
+    stormCloudCoverage: activeLayers.stormCloudCoverage,
+    hurricaneRainRadar: activeLayers.hurricaneRainRadar,
+    lightningTracking: activeLayers.lightningTracking,
+  }), [activeLayers.cloudCoverage, activeLayers.hurricaneRainRadar, activeLayers.lightningTracking, activeLayers.precipitation, activeLayers.pressure, activeLayers.smoke, activeLayers.stormCloudCoverage, activeLayers.wind])
 
   const envOpacity = useMemo(() => ({
     precipitation: layerOpacity.precipitation,
     wind: layerOpacity.wind,
     pressure: layerOpacity.pressure,
     smoke: layerOpacity.smoke,
-  }), [layerOpacity.precipitation, layerOpacity.pressure, layerOpacity.smoke, layerOpacity.wind])
+    cloudCoverage: layerOpacity.cloudCoverage,
+    stormCloudCoverage: layerOpacity.stormCloudCoverage,
+    hurricaneRainRadar: layerOpacity.hurricaneRainRadar,
+    lightningTracking: layerOpacity.lightningTracking,
+  }), [layerOpacity.cloudCoverage, layerOpacity.hurricaneRainRadar, layerOpacity.lightningTracking, layerOpacity.precipitation, layerOpacity.pressure, layerOpacity.smoke, layerOpacity.stormCloudCoverage, layerOpacity.wind])
 
   const stepTimeline = useCallback((direction: -1 | 1) => {
     if (availableTimes.length === 0) return
@@ -495,12 +537,20 @@ export default function WeatherIntelligence() {
                 wind: activeLayers.wind,
                 pressure: activeLayers.pressure,
                 smoke: activeLayers.smoke,
+                cloudCoverage: activeLayers.cloudCoverage,
+                stormCloudCoverage: activeLayers.stormCloudCoverage,
+                hurricaneRainRadar: activeLayers.hurricaneRainRadar,
+                lightningTracking: activeLayers.lightningTracking,
               }}
               layerOpacity={{
                 precipitation: layerOpacity.precipitation,
                 wind: layerOpacity.wind,
                 pressure: layerOpacity.pressure,
                 smoke: layerOpacity.smoke,
+                cloudCoverage: layerOpacity.cloudCoverage,
+                stormCloudCoverage: layerOpacity.stormCloudCoverage,
+                hurricaneRainRadar: layerOpacity.hurricaneRainRadar,
+                lightningTracking: layerOpacity.lightningTracking,
               }}
               onToggleLayer={toggleLayer}
               onOpacityChange={setLayerOpacity}

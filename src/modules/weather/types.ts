@@ -1,6 +1,24 @@
-export type WeatherLayerType = 'radar' | 'storms' | 'precipitation' | 'wind' | 'pressure' | 'smoke'
+export type WeatherLayerType =
+  | 'radar'
+  | 'storms'
+  | 'precipitation'
+  | 'wind'
+  | 'pressure'
+  | 'smoke'
+  | 'cloudCoverage'
+  | 'stormCloudCoverage'
+  | 'hurricaneRainRadar'
+  | 'lightningTracking'
 
-export type WeatherEnvLayerType = 'precipitation' | 'wind' | 'pressure' | 'smoke'
+export type WeatherEnvLayerType =
+  | 'precipitation'
+  | 'wind'
+  | 'pressure'
+  | 'smoke'
+  | 'cloudCoverage'
+  | 'stormCloudCoverage'
+  | 'hurricaneRainRadar'
+  | 'lightningTracking'
 
 export type WeatherMapView = {
   center: [number, number]

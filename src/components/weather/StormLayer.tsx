@@ -27,6 +27,14 @@ export function StormLayer({ selectedStorm }: StormLayerProps) {
         <span>{selectedStorm.movement.directionDeg} deg</span>
         <span>Intensity</span>
         <span>{selectedStorm.intensity.dbz} dBZ ({selectedStorm.intensity.category})</span>
+        {selectedStorm.type === 'hurricane' ? (
+          <>
+            <span>Funnel Tracking</span>
+            <span>Enabled</span>
+            <span>Path Prediction</span>
+            <span>18h forward model</span>
+          </>
+        ) : null}
         <span>Updated</span>
         <span>{new Date(selectedStorm.updatedAt).toLocaleTimeString('en', { hour12: false })}</span>
       </div>

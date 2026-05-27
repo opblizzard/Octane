@@ -5,6 +5,10 @@ const LAYER_LABELS: Record<WeatherEnvLayerType, string> = {
   wind: 'Wind',
   pressure: 'Pressure',
   smoke: 'Smoke',
+  cloudCoverage: 'Cloud Coverage',
+  stormCloudCoverage: 'Storm Cloud Coverage',
+  hurricaneRainRadar: 'Hurricane Rain Radar',
+  lightningTracking: 'Lightning Tracking',
 }
 
 type EnvLayerProps = {

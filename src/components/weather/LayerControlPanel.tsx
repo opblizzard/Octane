@@ -7,20 +7,41 @@ type LayerControlPanelProps = {
     wind: boolean
     pressure: boolean
     smoke: boolean
+    cloudCoverage: boolean
+    stormCloudCoverage: boolean
+    hurricaneRainRadar: boolean
+    lightningTracking: boolean
   }
   layerOpacity: {
     precipitation: number
     wind: number
     pressure: number
     smoke: number
+    cloudCoverage: number
+    stormCloudCoverage: number
+    hurricaneRainRadar: number
+    lightningTracking: number
   }
   onToggleLayer: (layer: 'storms' | WeatherEnvLayerType) => void
   onOpacityChange: (layer: WeatherEnvLayerType, opacity: number) => void
 }
 
-const ENV_TYPES: WeatherEnvLayerType[] = ['precipitation', 'wind', 'pressure', 'smoke']
+const ENV_TYPES: WeatherEnvLayerType[] = [
+  'precipitation',
+  'wind',
+  'pressure',
+  'smoke',
+  'cloudCoverage',
+  'stormCloudCoverage',
+  'hurricaneRainRadar',
+  'lightningTracking',
+]
 
 function prettyLayerLabel(type: string): string {
+  if (type === 'cloudCoverage') return 'Cloud Coverage'
+  if (type === 'stormCloudCoverage') return 'Storm Cloud Coverage'
+  if (type === 'hurricaneRainRadar') return 'Hurricane Rain Radar'
+  if (type === 'lightningTracking') return 'Lightning Tracking'
   return type.charAt(0).toUpperCase() + type.slice(1)
 }
 

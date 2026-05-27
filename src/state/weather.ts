@@ -11,7 +11,18 @@ import type {
 export type { WeatherLayerType, WeatherMapView, WeatherRadarFrame }
 
 type LayerVisibility = Record<WeatherLayerType, boolean>
-type LayerOpacity = Record<'radar' | 'precipitation' | 'wind' | 'pressure' | 'smoke', number>
+type LayerOpacity = Record<
+  | 'radar'
+  | 'precipitation'
+  | 'wind'
+  | 'pressure'
+  | 'smoke'
+  | 'cloudCoverage'
+  | 'stormCloudCoverage'
+  | 'hurricaneRainRadar'
+  | 'lightningTracking',
+  number
+>
 type LayerStatus = Record<WeatherLayerType, boolean>
 type LayerErrorState = Record<WeatherLayerType, string | null>
 
@@ -59,6 +70,10 @@ const LAYER_DEFAULTS: LayerVisibility = {
   wind: true,
   pressure: true,
   smoke: true,
+  cloudCoverage: true,
+  stormCloudCoverage: true,
+  hurricaneRainRadar: true,
+  lightningTracking: true,
 }
 
 const LOADING_DEFAULTS: LayerStatus = {
@@ -68,6 +83,10 @@ const LOADING_DEFAULTS: LayerStatus = {
   wind: false,
   pressure: false,
   smoke: false,
+  cloudCoverage: false,
+  stormCloudCoverage: false,
+  hurricaneRainRadar: false,
+  lightningTracking: false,
 }
 
 const STALE_DEFAULTS: LayerStatus = {
@@ -77,6 +96,10 @@ const STALE_DEFAULTS: LayerStatus = {
   wind: false,
   pressure: false,
   smoke: false,
+  cloudCoverage: false,
+  stormCloudCoverage: false,
+  hurricaneRainRadar: false,
+  lightningTracking: false,
 }
 
 const ERROR_DEFAULTS: LayerErrorState = {
@@ -86,6 +109,10 @@ const ERROR_DEFAULTS: LayerErrorState = {
   wind: null,
   pressure: null,
   smoke: null,
+  cloudCoverage: null,
+  stormCloudCoverage: null,
+  hurricaneRainRadar: null,
+  lightningTracking: null,
 }
 
 const LAST_KNOWN_UPDATED_DEFAULTS: Record<WeatherLayerType, string | null> = {
@@ -95,6 +122,10 @@ const LAST_KNOWN_UPDATED_DEFAULTS: Record<WeatherLayerType, string | null> = {
   wind: null,
   pressure: null,
   smoke: null,
+  cloudCoverage: null,
+  stormCloudCoverage: null,
+  hurricaneRainRadar: null,
+  lightningTracking: null,
 }
 
 export const useWeatherStore = create<WeatherStore>((set) => ({
@@ -107,6 +138,10 @@ export const useWeatherStore = create<WeatherStore>((set) => ({
     wind: 0.72,
     pressure: 0.72,
     smoke: 0.72,
+    cloudCoverage: 0.66,
+    stormCloudCoverage: 0.74,
+    hurricaneRainRadar: 0.8,
+    lightningTracking: 0.88,
   },
   mapView: {
     center: [39.8283, -98.5795],

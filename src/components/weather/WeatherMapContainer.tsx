@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { CircleMarker, LayerGroup, Map as LeafletMap, Polyline, Polygon, TileLayer, Tooltip } from 'leaflet'
+import type { CircleMarker, ImageOverlay, LayerGroup, Map as LeafletMap, Polyline, Polygon, TileLayer, Tooltip } from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import '@/styles/weather.css'
 import type { WeatherEnvLayerType, WeatherLayerData, WeatherMapView, WeatherRadarFrame, WeatherStormCell } from '@/modules/weather/types'
@@ -24,6 +24,278 @@ function findNearestPoint(
   })
 
   return nearest
+}
+
+function projectPoint(origin: [number, number], headingDeg: number, distanceDeg: number): [number, number] {
+  const heading = (headingDeg * Math.PI) / 180
+  const lat = origin[0] + (Math.cos(heading) * distanceDeg)
+  const lngScale = Math.max(0.3, Math.cos((origin[0] * Math.PI) / 180))
+  const lng = origin[1] + ((Math.sin(heading) * distanceDeg) / lngScale)
+  return [Number(lat.toFixed(4)), Number(lng.toFixed(4))]
+}
+
+function buildPredictionTrack(
+  centroid: [number, number],
+  speedKts: number,
+  directionDeg: number,
+  horizonHours = 12,
+  stepHours = 2,
+): Array<[number, number]> {
+  const points: Array<[number, number]> = [centroid]
+  const speedDegPerHour = Math.max(0.04, speedKts / 60)
+
+  for (let hour = stepHours; hour <= horizonHours; hour += stepHours) {
+    const drift = Math.sin(hour / 2.3) * 8
+    const heading = directionDeg + drift
+    const distance = speedDegPerHour * hour
+    points.push(projectPoint(centroid, heading, distance))
+  }
+
+  return points
+}
+
+type HurricaneModelTrack = {
+  name: string
+  color: string
+  points: Array<[number, number]>
+}
+
+const HURRICANE_MODEL_GUIDANCE: Array<{ name: string; color: string; headingBias: number; speedScale: number }> = [
+  { name: 'GFS', color: '#22c55e', headingBias: -6, speedScale: 1.04 },
+  { name: 'ECMWF', color: '#f59e0b', headingBias: 2, speedScale: 0.98 },
+  { name: 'UKMET', color: '#ef4444', headingBias: -12, speedScale: 1.1 },
+  { name: 'CMC', color: '#38bdf8', headingBias: 8, speedScale: 0.93 },
+  { name: 'HWRF', color: '#eab308', headingBias: -3, speedScale: 1.08 },
+  { name: 'HMON', color: '#84cc16', headingBias: -10, speedScale: 1.02 },
+  { name: 'ICON', color: '#f97316', headingBias: 11, speedScale: 0.91 },
+  { name: 'NAVGEM', color: '#a855f7', headingBias: 5, speedScale: 0.96 },
+  { name: 'CTCX', color: '#f8fafc', headingBias: 14, speedScale: 0.88 },
+  { name: 'AP02', color: '#fef08a', headingBias: 18, speedScale: 0.85 },
+]
+
+function buildModelGuidanceTracks(
+  centroid: [number, number],
+  speedKts: number,
+  directionDeg: number,
+): HurricaneModelTrack[] {
+  return HURRICANE_MODEL_GUIDANCE.map((model, modelIndex) => {
+    const horizonHours = 36
+    const stepHours = 6
+    const totalSteps = horizonHours / stepHours
+    const speedDegPerHour = Math.max(0.04, (speedKts * model.speedScale) / 60)
+
+    const points: Array<[number, number]> = [centroid]
+
+    for (let stepIndex = 1; stepIndex <= totalSteps; stepIndex += 1) {
+      // Keep model guidance tightly grouped near origin, then fan out downstream.
+      const divergence = Math.pow(stepIndex / totalSteps, 1.85)
+      const headingBias = model.headingBias * divergence
+      const curvature = Math.sin((stepIndex * 0.62) + modelIndex) * 5.2 * divergence
+      const heading = directionDeg + headingBias + curvature
+      const distance = speedDegPerHour * stepHours * stepIndex * (0.96 + (divergence * 0.08))
+      points.push(projectPoint(centroid, heading, distance))
+    }
+
+    return {
+      name: model.name,
+      color: model.color,
+      points,
+    }
+  })
+}
+
+function toGrayHex(value: number, min = 58, max = 220): string {
+  const clamped = Math.max(0, Math.min(100, value)) / 100
+  const channel = Math.round(min + ((max - min) * clamped))
+  const hex = channel.toString(16).padStart(2, '0')
+  return `#${hex}${hex}${hex}`
+}
+
+function toBlueHex(value: number, min = 120, max = 235): string {
+  const clamped = Math.max(0, Math.min(100, value)) / 100
+  const blue = Math.round(min + ((max - min) * clamped))
+  const green = Math.round(130 + (clamped * 70))
+  const red = Math.round(40 + (clamped * 55))
+  const r = red.toString(16).padStart(2, '0')
+  const g = green.toString(16).padStart(2, '0')
+  const b = blue.toString(16).padStart(2, '0')
+  return `#${r}${g}${b}`
+}
+
+function distanceSquared(a: [number, number], b: [number, number]): number {
+  const dLat = a[0] - b[0]
+  const dLng = a[1] - b[1]
+  return (dLat * dLat) + (dLng * dLng)
+}
+
+function buildCloudPatch(
+  center: [number, number],
+  intensity: number,
+  seed: number,
+  scaleDeg: number,
+): Array<[number, number]> {
+  const points = 30
+  const strength = 0.96 + (intensity * 0.62)
+  const lngScale = Math.max(0.35, Math.cos((center[0] * Math.PI) / 180))
+
+  return Array.from({ length: points }).map((_, index) => {
+    const angle = (index / points) * Math.PI * 2
+    const wobbleA = Math.sin((seed * 0.61) + (index * 0.74)) * 0.16
+    const wobbleB = Math.cos((seed * 0.47) + (index * 1.03)) * 0.13
+    const puff = 0.92 + (Math.abs(Math.sin((seed * 0.29) + (angle * 1.45))) * 0.42)
+    const lobe = 0.94 + (Math.abs(Math.cos((seed * 0.18) + (angle * 2.15))) * 0.24)
+    const radius = scaleDeg * strength * (0.94 + wobbleA + wobbleB) * puff * lobe
+    const lat = center[0] + (Math.cos(angle) * radius)
+    const lng = center[1] + ((Math.sin(angle) * radius * (1.14 + (wobbleA * 0.55))) / lngScale)
+    return [Number(lat.toFixed(4)), Number(lng.toFixed(4))]
+  })
+}
+
+function buildCloudMassCenters(
+  center: [number, number],
+  driftDeg: number,
+  scaleDeg: number,
+): Array<[number, number]> {
+  return [
+    center,
+    projectPoint(center, driftDeg + 24, scaleDeg * 0.56),
+    projectPoint(center, driftDeg - 31, scaleDeg * 0.48),
+    projectPoint(center, driftDeg + 78, scaleDeg * 0.33),
+    projectPoint(center, driftDeg - 88, scaleDeg * 0.29),
+  ]
+}
+
+function buildCloudRasterDataUrl(
+  points: Array<{ lat: number; lng: number; value: number; directionDeg?: number }>,
+  bounds: { west: number; south: number; east: number; north: number },
+  mode: 'cloud' | 'storm',
+  timeIso: string,
+): string {
+  function blurField(source: Float32Array, w: number, h: number, passes: number): Float32Array {
+    let current = source
+    for (let pass = 0; pass < passes; pass += 1) {
+      const horizontal = new Float32Array(w * h)
+      const out = new Float32Array(w * h)
+
+      for (let y = 0; y < h; y += 1) {
+        for (let x = 0; x < w; x += 1) {
+          const left = current[(y * w) + Math.max(0, x - 1)]
+          const center = current[(y * w) + x]
+          const right = current[(y * w) + Math.min(w - 1, x + 1)]
+          horizontal[(y * w) + x] = (left + (center * 2) + right) / 4
+        }
+      }
+
+      for (let y = 0; y < h; y += 1) {
+        for (let x = 0; x < w; x += 1) {
+          const top = horizontal[(Math.max(0, y - 1) * w) + x]
+          const center = horizontal[(y * w) + x]
+          const bottom = horizontal[(Math.min(h - 1, y + 1) * w) + x]
+          out[(y * w) + x] = (top + (center * 2) + bottom) / 4
+        }
+      }
+
+      current = out
+    }
+    return current
+  }
+
+  const width = 480
+  const height = 300
+  const canvas = document.createElement('canvas')
+  canvas.width = width
+  canvas.height = height
+
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return canvas.toDataURL('image/png')
+
+  const field = new Float32Array(width * height)
+  const lngSpan = Math.max(0.0001, bounds.east - bounds.west)
+  const latSpan = Math.max(0.0001, bounds.north - bounds.south)
+  const nowPhase = Math.floor(new Date(timeIso).getTime() / 1000) / 3600
+
+  points.forEach((point, index) => {
+    const nx = (point.lng - bounds.west) / lngSpan
+    const ny = (bounds.north - point.lat) / latSpan
+    if (nx < -0.2 || nx > 1.2 || ny < -0.2 || ny > 1.2) return
+
+    const cx = Math.round(nx * (width - 1))
+    const cy = Math.round(ny * (height - 1))
+    const normalized = Math.max(0, Math.min(1, mode === 'storm' ? (point.value - 30) / 70 : (point.value - 18) / 82))
+    const radius = (mode === 'storm' ? 18 : 24) + (normalized * (mode === 'storm' ? 26 : 38))
+    const sigma = radius * 0.72
+    const denom = 2 * sigma * sigma
+    const heading = ((point.directionDeg ?? 245) * Math.PI) / 180
+    const advectX = Math.sin(heading)
+    const advectY = -Math.cos(heading)
+
+    const minX = Math.max(0, Math.floor(cx - radius))
+    const maxX = Math.min(width - 1, Math.ceil(cx + radius))
+    const minY = Math.max(0, Math.floor(cy - radius))
+    const maxY = Math.min(height - 1, Math.ceil(cy + radius))
+
+    for (let y = minY; y <= maxY; y += 1) {
+      for (let x = minX; x <= maxX; x += 1) {
+        const dx = x - cx
+        const dy = y - cy
+        const d2 = (dx * dx) + (dy * dy)
+        if (d2 > radius * radius) continue
+
+        const noise = 0.88 + (0.18 * Math.sin((x * 0.06) + (y * 0.04) + nowPhase + (index * 0.07)))
+        const influence = normalized * Math.exp(-d2 / denom) * noise
+        const slot = (y * width) + x
+        field[slot] = Math.min(1, field[slot] + (influence * (mode === 'storm' ? 0.75 : 0.62)))
+
+        // Advection smear: stretch cloud energy along motion direction for fluid cloud flow.
+        const smearDistance = mode === 'storm' ? 9 : 13
+        const sx = Math.round(x + (advectX * smearDistance))
+        const sy = Math.round(y + (advectY * smearDistance))
+        if (sx >= 0 && sx < width && sy >= 0 && sy < height) {
+          const sSlot = (sy * width) + sx
+          field[sSlot] = Math.min(1, field[sSlot] + (influence * (mode === 'storm' ? 0.22 : 0.3)))
+        }
+      }
+    }
+  })
+
+  const smoothedField = blurField(field, width, height, mode === 'storm' ? 2 : 3)
+
+  const imageData = ctx.createImageData(width, height)
+  for (let i = 0; i < field.length; i += 1) {
+    const v = Math.max(0, Math.min(1, smoothedField[i]))
+    const alpha = v < 0.08 ? 0 : Math.min(1, Math.pow(v, 1.18))
+    const pixel = i * 4
+
+    if (mode === 'storm') {
+      imageData.data[pixel] = Math.round(180 + (v * 45))
+      imageData.data[pixel + 1] = Math.round(200 + (v * 35))
+      imageData.data[pixel + 2] = Math.round(232 + (v * 20))
+      imageData.data[pixel + 3] = Math.round(alpha * 180)
+    } else {
+      imageData.data[pixel] = Math.round(218 + (v * 35))
+      imageData.data[pixel + 1] = Math.round(228 + (v * 27))
+      imageData.data[pixel + 2] = Math.round(243 + (v * 12))
+      imageData.data[pixel + 3] = Math.round(alpha * 168)
+    }
+  }
+
+  ctx.putImageData(imageData, 0, 0)
+  return canvas.toDataURL('image/png')
+}
+
+function buildVectorPointsSignature(
+  points: Array<{ lat: number; lng: number; value: number; directionDeg?: number }> | undefined,
+): string {
+  if (!points || points.length === 0) return 'none'
+
+  const sampleIndexes = [0, Math.floor(points.length / 2), points.length - 1]
+  const sample = sampleIndexes
+    .map((index) => points[index])
+    .filter((point): point is { lat: number; lng: number; value: number; directionDeg?: number } => Boolean(point))
+    .map((point) => `${point.lat.toFixed(2)},${point.lng.toFixed(2)},${point.value.toFixed(1)},${(point.directionDeg ?? -1).toFixed(1)}`)
+    .join('|')
+
+  return `${points.length}:${sample}`
 }
 
 type LeafletModule = typeof import('leaflet')
@@ -73,6 +345,12 @@ export function WeatherMapContainer({
   const radarLayerRef = useRef<TileLayer | null>(null)
   const stormLayerRef = useRef<LayerGroup | null>(null)
   const envLayerRefs = useRef<Partial<Record<WeatherEnvLayerType, LayerGroup>>>({})
+  const envTileLayerRefs = useRef<Partial<Record<WeatherEnvLayerType, TileLayer>>>({})
+  const envImageLayerRefs = useRef<Partial<Record<WeatherEnvLayerType, ImageOverlay>>>({})
+  const envLayerSignatureRefs = useRef<Partial<Record<WeatherEnvLayerType, string>>>({})
+  const isZoomingRef = useRef(false)
+  const isPanningRef = useRef(false)
+  const lastMapEventViewRef = useRef<{ center: [number, number]; zoom: number } | null>(null)
   const leafletRef = useRef<LeafletModule | null>(null)
   const hoverTimerRef = useRef<number | null>(null)
   const envProbeTooltipRef = useRef<Tooltip | null>(null)
@@ -95,6 +373,9 @@ export function WeatherMapContainer({
         attributionControl: true,
         minZoom: 2,
         maxZoom: 12,
+        zoomAnimation: true,
+        markerZoomAnimation: true,
+        fadeAnimation: false,
       }).setView(mapView.center, mapView.zoom)
 
       map.createPane('weatherRadarPane')
@@ -148,21 +429,45 @@ export function WeatherMapContainer({
         wind: leaflet.layerGroup().addTo(map),
         pressure: leaflet.layerGroup().addTo(map),
         smoke: leaflet.layerGroup().addTo(map),
+        cloudCoverage: leaflet.layerGroup().addTo(map),
+        stormCloudCoverage: leaflet.layerGroup().addTo(map),
+        hurricaneRainRadar: leaflet.layerGroup().addTo(map),
+        lightningTracking: leaflet.layerGroup().addTo(map),
       }
+
+      map.on('movestart', () => {
+        isPanningRef.current = true
+      })
 
       map.on('moveend', () => {
         const center = map.getCenter()
         const bounds = map.getBounds()
+        const nextCenter: [number, number] = [
+          Number(center.lat.toFixed(6)),
+          Number(center.lng.toFixed(6)),
+        ]
+        const zoom = map.getZoom()
+        isPanningRef.current = false
+        lastMapEventViewRef.current = { center: nextCenter, zoom }
+
         onMapViewChange(
-          [Number(center.lat.toFixed(4)), Number(center.lng.toFixed(4))],
-          map.getZoom(),
+          nextCenter,
+          zoom,
           {
-            west: Number(bounds.getWest().toFixed(4)),
-            south: Number(bounds.getSouth().toFixed(4)),
-            east: Number(bounds.getEast().toFixed(4)),
-            north: Number(bounds.getNorth().toFixed(4)),
+            west: Number(bounds.getWest().toFixed(6)),
+            south: Number(bounds.getSouth().toFixed(6)),
+            east: Number(bounds.getEast().toFixed(6)),
+            north: Number(bounds.getNorth().toFixed(6)),
           },
         )
+      })
+
+      map.on('zoomstart', () => {
+        isZoomingRef.current = true
+      })
+
+      map.on('zoomend', () => {
+        isZoomingRef.current = false
       })
 
       const forceSize = () => map.invalidateSize({ pan: false, animate: false })
@@ -190,6 +495,11 @@ export function WeatherMapContainer({
       radarLayerRef.current = null
       stormLayerRef.current?.remove()
       stormLayerRef.current = null
+      Object.values(envTileLayerRefs.current).forEach((layer) => layer?.remove())
+      envTileLayerRefs.current = {}
+      Object.values(envImageLayerRefs.current).forEach((layer) => layer?.remove())
+      envImageLayerRefs.current = {}
+      envLayerSignatureRefs.current = {}
       Object.values(envLayerRefs.current).forEach((layer) => layer?.remove())
       envLayerRefs.current = {}
       if (hoverTimerRef.current) {
@@ -209,6 +519,9 @@ export function WeatherMapContainer({
       map?.remove()
       mapRef.current = null
       leafletRef.current = null
+      isZoomingRef.current = false
+      isPanningRef.current = false
+      lastMapEventViewRef.current = null
       setMapReady(false)
     }
   }, [onMapViewChange])
@@ -217,11 +530,22 @@ export function WeatherMapContainer({
     const map = mapRef.current
     if (!map) return
 
+    const lastMapEventView = lastMapEventViewRef.current
+    if (lastMapEventView) {
+      const centerMatchesMapEvent = Math.abs(lastMapEventView.center[0] - mapView.center[0]) < 0.0002
+        && Math.abs(lastMapEventView.center[1] - mapView.center[1]) < 0.0002
+      const zoomMatchesMapEvent = lastMapEventView.zoom === mapView.zoom
+      if (centerMatchesMapEvent && zoomMatchesMapEvent) {
+        lastMapEventViewRef.current = null
+        return
+      }
+    }
+
     const center = map.getCenter()
     const centerChanged = Math.abs(center.lat - mapView.center[0]) > 0.0001 || Math.abs(center.lng - mapView.center[1]) > 0.0001
     const zoomChanged = map.getZoom() !== mapView.zoom
 
-    if (centerChanged || zoomChanged) {
+    if (!isZoomingRef.current && !isPanningRef.current && (centerChanged || zoomChanged)) {
       map.setView(mapView.center, mapView.zoom, { animate: false })
     }
   }, [mapView])
@@ -266,7 +590,9 @@ export function WeatherMapContainer({
       pane: 'weatherRadarPane',
       maxNativeZoom: 6,
       minNativeZoom: 0,
-      updateWhenZooming: false,
+      updateWhenZooming: true,
+      updateWhenIdle: true,
+      keepBuffer: 4,
       crossOrigin: true,
       errorTileUrl: 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==',
     }).addTo(map)
@@ -280,6 +606,8 @@ export function WeatherMapContainer({
     if (!map || !leaflet || !stormLayer) return
 
     const precipitationPoints = envLayers.precipitation?.vectorPoints ?? []
+    const stormCloudPoints = envLayers.stormCloudCoverage?.vectorPoints ?? []
+    const hurricaneRainPoints = envLayers.hurricaneRainRadar?.vectorPoints ?? []
 
     const clearStormPrecipProbe = () => {
       if (stormHoverTimerRef.current) {
@@ -340,9 +668,15 @@ export function WeatherMapContainer({
             pane: 'tooltipPane',
           })
 
+          const nearestCloud = findNearestPoint(stormCloudPoints, lat, lng)
+          const lines = [`Precipitation ${nearest.value.toFixed(1)} mm/hr`]
+          if (nearestCloud) {
+            lines.push(`Storm cloud ${nearestCloud.value.toFixed(0)}%`)
+          }
+
           stormPrecipTooltipRef.current
             .setLatLng([lat, lng])
-            .setContent(`Precipitation ${nearest.value.toFixed(1)} mm/hr`)
+            .setContent(lines.join('<br/>'))
             .addTo(map)
         }, 2000)
       })
@@ -377,9 +711,15 @@ export function WeatherMapContainer({
             pane: 'tooltipPane',
           })
 
+          const nearestCloud = findNearestPoint(stormCloudPoints, lat, lng)
+          const lines = [`Precipitation ${nearest.value.toFixed(1)} mm/hr`]
+          if (nearestCloud) {
+            lines.push(`Storm cloud ${nearestCloud.value.toFixed(0)}%`)
+          }
+
           stormPrecipTooltipRef.current
             .setLatLng([lat, lng])
-            .setContent(`Precipitation ${nearest.value.toFixed(1)} mm/hr`)
+            .setContent(lines.join('<br/>'))
             .addTo(map)
         }, 2000)
       })
@@ -398,26 +738,211 @@ export function WeatherMapContainer({
         className: 'weather-storm-vector',
       }).addTo(stormLayer)
       arrows.push(arrow)
+
+      if (storm.type === 'hurricane') {
+        const localRainBands = hurricaneRainPoints
+          .filter((point) => distanceSquared([point.lat, point.lng], storm.centroid) <= 7.2)
+          .sort((a, b) => distanceSquared([a.lat, a.lng], storm.centroid) - distanceSquared([b.lat, b.lng], storm.centroid))
+          .slice(0, 18)
+
+        localRainBands.forEach((bandPoint) => {
+          const rainIntensity = Math.max(0, Math.min(1, bandPoint.value / 75))
+          const isInnerBand = bandPoint.value >= 35
+          const cloudShade = isInnerBand ? '#4b5563' : '#d1d5db'
+          const outerPatch = buildCloudPatch(
+            [bandPoint.lat, bandPoint.lng],
+            rainIntensity,
+            bandPoint.value + (storm.movement.directionDeg * 0.03),
+            isInnerBand ? 0.24 : 0.2,
+          )
+
+          leaflet.polygon(outerPatch, {
+            color: cloudShade,
+            fillColor: cloudShade,
+            fillOpacity: isInnerBand ? 0.3 : 0.22,
+            opacity: isInnerBand ? 0.42 : 0.32,
+            weight: 0,
+            pane: 'weatherStormPane',
+            className: isInnerBand ? 'weather-hurricane-mid-band-patch' : 'weather-hurricane-edge-band-patch',
+          }).addTo(stormLayer)
+
+          if (isInnerBand) {
+            const innerPatch = buildCloudPatch(
+              [bandPoint.lat, bandPoint.lng],
+              rainIntensity,
+              bandPoint.value + (storm.movement.directionDeg * 0.11),
+              0.14,
+            )
+            leaflet.polygon(innerPatch, {
+              color: '#334155',
+              fillColor: '#334155',
+              fillOpacity: 0.22,
+              opacity: 0.24,
+              weight: 0,
+              pane: 'weatherStormPane',
+              className: 'weather-cloud-patch-inner',
+            }).addTo(stormLayer)
+          }
+
+          if (typeof bandPoint.directionDeg === 'number') {
+            const rainVectorEnd = projectPoint([bandPoint.lat, bandPoint.lng], bandPoint.directionDeg, 0.22)
+            leaflet.polyline([[bandPoint.lat, bandPoint.lng], rainVectorEnd], {
+              color: '#38bdf8',
+              opacity: 0.45 + (rainIntensity * 0.35),
+              weight: 1.3,
+              pane: 'weatherStormPane',
+              className: 'weather-hurricane-rain-stream',
+            }).addTo(stormLayer)
+          }
+        })
+
+        // Funnel motion tracking: swirling darker-gray funnel with rain activity.
+        const funnelTrack = Array.from({ length: 9 }).map((_, segmentIndex) => {
+          const distance = 0.16 + (segmentIndex * 0.09)
+          const headingOffset = (segmentIndex * 26) - 36
+          return projectPoint(storm.centroid, storm.movement.directionDeg + headingOffset, distance)
+        })
+
+        leaflet.polyline(funnelTrack, {
+          color: '#374151',
+          opacity: isSelected ? 0.95 : 0.84,
+          weight: isSelected ? 3.1 : 2.4,
+          pane: 'weatherStormPane',
+          className: 'weather-hurricane-funnel-track',
+        })
+          .bindTooltip('Hurricane funnel motion', { direction: 'top', opacity: 0.92 })
+          .addTo(stormLayer)
+
+        const prediction = buildPredictionTrack(
+          storm.centroid,
+          storm.movement.speedKts,
+          storm.movement.directionDeg,
+          18,
+          3,
+        )
+
+        leaflet.polyline(prediction, {
+          color: '#67e8f9',
+          opacity: isSelected ? 0.95 : 0.78,
+          weight: isSelected ? 2.8 : 2.2,
+          dashArray: '7 6',
+          pane: 'weatherStormPane',
+          className: 'weather-hurricane-prediction',
+        })
+          .bindTooltip('Predicted hurricane path (18h)', { direction: 'top', opacity: 0.92 })
+          .addTo(stormLayer)
+
+        prediction.slice(1).forEach((point) => {
+          leaflet.circleMarker(point, {
+            radius: 2.6,
+            color: '#bae6fd',
+            fillColor: '#22d3ee',
+            fillOpacity: 0.88,
+            opacity: 0.92,
+            weight: 1.2,
+            pane: 'weatherStormPane',
+          }).addTo(stormLayer)
+        })
+
+        const guidanceTracks = buildModelGuidanceTracks(
+          storm.centroid,
+          storm.movement.speedKts,
+          storm.movement.directionDeg,
+        )
+
+        guidanceTracks.forEach((track, index) => {
+          leaflet.polyline(track.points, {
+            color: track.color,
+            opacity: isSelected ? 0.94 : 0.78,
+            weight: isSelected ? 5.2 : 3.9,
+            pane: 'weatherStormPane',
+            className: 'weather-hurricane-model-track',
+          })
+            .bindTooltip(`${track.name} guidance`, { direction: 'top', opacity: 0.94 })
+            .addTo(stormLayer)
+
+          const endPoint = track.points[track.points.length - 1]
+          if (!endPoint) return
+          const modelLabelIcon = leaflet.divIcon({
+            className: 'weather-hurricane-model-label-host',
+            html: `<span class="weather-hurricane-model-label" style="color:${track.color}">${track.name}</span>`,
+            iconSize: [44, 16],
+            iconAnchor: [10, 10],
+          })
+
+          const offsetPoint = projectPoint(endPoint, storm.movement.directionDeg + (index * 3), 0.16)
+          leaflet.marker(offsetPoint, {
+            icon: modelLabelIcon,
+            pane: 'weatherStormPane',
+          }).addTo(stormLayer)
+        })
+
+        const eyeIcon = leaflet.divIcon({
+          className: 'weather-hurricane-eye-host',
+          html: '<span class="weather-hurricane-eye-icon">🌀</span>',
+          iconSize: [34, 34],
+          iconAnchor: [17, 17],
+        })
+
+        leaflet.marker(storm.centroid, {
+          icon: eyeIcon,
+          pane: 'weatherStormPane',
+        })
+          .bindTooltip('Hurricane center', { direction: 'top', opacity: 0.94 })
+          .addTo(stormLayer)
+      }
     })
 
     return () => {
       clearStormPrecipProbe()
     }
-  }, [envLayers.precipitation?.vectorPoints, envVisibility.precipitation, mapReady, onStormSelect, selectedStormId, stormCells, stormsVisible])
+  }, [envLayers.precipitation?.vectorPoints, envLayers.stormCloudCoverage?.vectorPoints, envVisibility.precipitation, mapReady, onStormSelect, selectedStormId, stormCells, stormsVisible])
 
   useEffect(() => {
     if (!mapReady) return
+    const map = mapRef.current
     const leaflet = leafletRef.current
     const layers = envLayerRefs.current
-    if (!leaflet) return
+    const tileLayers = envTileLayerRefs.current
+    const imageLayers = envImageLayerRefs.current
+    const layerSignatures = envLayerSignatureRefs.current
+    if (!leaflet || !map) return
+    if (isZoomingRef.current || isPanningRef.current) return
 
-    const envTypes: WeatherEnvLayerType[] = ['precipitation', 'wind', 'pressure', 'smoke']
+    const envTypes: WeatherEnvLayerType[] = [
+      'precipitation',
+      'wind',
+      'pressure',
+      'smoke',
+      'cloudCoverage',
+      'stormCloudCoverage',
+      'hurricaneRainRadar',
+      'lightningTracking',
+    ]
     envTypes.forEach((type) => {
       const targetLayer = layers[type]
       if (!targetLayer) return
 
-      targetLayer.clearLayers()
-      if (!envVisibility[type]) return
+      if (!envVisibility[type]) {
+        tileLayers[type]?.remove()
+        delete tileLayers[type]
+        imageLayers[type]?.remove()
+        delete imageLayers[type]
+        targetLayer.clearLayers()
+        delete layerSignatures[type]
+        return
+      }
+
+      tileLayers[type]?.setOpacity(envOpacity[type])
+      imageLayers[type]?.setOpacity(envOpacity[type])
+
+      const disableFullSurfaceCloudLayer = type === 'cloudCoverage' || type === 'stormCloudCoverage'
+      if (disableFullSurfaceCloudLayer) {
+        tileLayers[type]?.remove()
+        delete tileLayers[type]
+        imageLayers[type]?.remove()
+        delete imageLayers[type]
+      }
 
       if (type === 'smoke' || type === 'pressure' || type === 'precipitation') {
         // Smoke, pressure, and precipitation are shown via hover probes instead of full-screen overlays.
@@ -425,10 +950,55 @@ export function WeatherMapContainer({
       }
 
       const data = envLayers[type]
-      if (!data || !Array.isArray(data.vectorPoints)) return
+      if (!data || !Array.isArray(data.vectorPoints)) {
+        tileLayers[type]?.remove()
+        delete tileLayers[type]
+        imageLayers[type]?.remove()
+        delete imageLayers[type]
+        targetLayer.clearLayers()
+        delete layerSignatures[type]
+        return
+      }
+
+      const vectorSignature = buildVectorPointsSignature(data.vectorPoints)
+      const tileSignature = data.renderMode === 'tile'
+        && data.tileUrlTemplate
+        && type !== 'cloudCoverage'
+        && type !== 'stormCloudCoverage'
+        ? `tile|${type}|${data.time}|${data.tileUrlTemplate}`
+        : null
+      const vectorSignatureWithState = `vector|${type}|${data.time}|${vectorSignature}|z${mapView.zoom}|o${Math.round(envOpacity[type] * 100)}`
+      const signature = tileSignature ?? vectorSignatureWithState
+
+      if (layerSignatures[type] === signature) {
+        return
+      }
+
+      layerSignatures[type] = signature
+      tileLayers[type]?.remove()
+      delete tileLayers[type]
+      imageLayers[type]?.remove()
+      delete imageLayers[type]
+      targetLayer.clearLayers()
+
+      if (!disableFullSurfaceCloudLayer && data.renderMode === 'tile' && data.tileUrlTemplate) {
+        tileLayers[type] = leaflet.tileLayer(data.tileUrlTemplate, {
+          opacity: envOpacity[type],
+          pane: 'weatherEnvPane',
+          className: 'weather-storm-cloud-tile',
+          maxNativeZoom: 8,
+          minNativeZoom: 0,
+          updateWhenZooming: true,
+          updateWhenIdle: true,
+          keepBuffer: 4,
+          crossOrigin: true,
+          errorTileUrl: 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==',
+        }).addTo(map)
+        return
+      }
 
       data.vectorPoints.forEach((point, index) => {
-        const color = '#22c55e'
+        const windColor = '#22c55e'
 
         if (type === 'wind' && typeof point.directionDeg === 'number') {
           const windStride = mapView.zoom >= 11
@@ -459,7 +1029,7 @@ export function WeatherMapContainer({
           const endLng = point.lng + (Math.sin(heading) * lineLength * 0.52)
 
           const line = leaflet.polyline([[startLat, startLng], [endLat, endLng]], {
-            color,
+            color: windColor,
             opacity: mapView.zoom >= 11
               ? 0.2 + (envOpacity.wind * 0.16)
               : 0.38 + (envOpacity.wind * 0.22),
@@ -476,7 +1046,7 @@ export function WeatherMapContainer({
           const rightLng = endLng - (Math.sin(heading + wingAngle) * arrowSize)
 
           leaflet.polyline([[endLat, endLng], [leftLat, leftLng]], {
-            color,
+            color: windColor,
             opacity: mapView.zoom >= 11
               ? 0.22 + (envOpacity.wind * 0.14)
               : 0.4 + (envOpacity.wind * 0.24),
@@ -486,7 +1056,7 @@ export function WeatherMapContainer({
           }).addTo(targetLayer)
 
           leaflet.polyline([[endLat, endLng], [rightLat, rightLng]], {
-            color,
+            color: windColor,
             opacity: mapView.zoom >= 11
               ? 0.22 + (envOpacity.wind * 0.14)
               : 0.4 + (envOpacity.wind * 0.24),
@@ -502,29 +1072,135 @@ export function WeatherMapContainer({
           return
         }
 
-        const normalized = type === 'wind'
+        if (type === 'lightningTracking') {
+          const recentMinutes = Math.max(1, point.value)
+          const recentFactor = Math.max(0, Math.min(1, (16 - recentMinutes) / 16))
+          const icon = leaflet.divIcon({
+            className: 'weather-lightning-icon-host',
+            html: '<span class="weather-lightning-icon">⚡</span>',
+            iconSize: [20, 20],
+            iconAnchor: [10, 10],
+          })
+          const marker = leaflet.marker([point.lat, point.lng], { icon, pane: 'weatherEnvPane' }).addTo(targetLayer)
+          marker.bindTooltip(`Lightning strike ${recentMinutes.toFixed(0)} min ago`, {
+            direction: 'top',
+            opacity: 0.95,
+          })
+
+          leaflet.circleMarker([point.lat, point.lng], {
+            radius: 4.5 + (recentFactor * 4.2),
+            color: '#fde047',
+            fillColor: '#facc15',
+            fillOpacity: 0.12 + (recentFactor * 0.2),
+            opacity: 0.25 + (recentFactor * 0.4),
+            weight: 1,
+            pane: 'weatherEnvPane',
+            className: 'weather-lightning-pulse',
+          }).addTo(targetLayer)
+          return
+        }
+
+        if (type === 'cloudCoverage' || type === 'stormCloudCoverage' || type === 'hurricaneRainRadar') {
+          if ((type === 'cloudCoverage' || type === 'stormCloudCoverage')) {
+            const cloudStride = type === 'cloudCoverage'
+              ? (mapView.zoom >= 9 ? 2 : 3)
+              : (mapView.zoom >= 9 ? 1 : 2)
+            if (index % cloudStride !== 0) return
+          }
+
+          const scale = mapView.zoom >= 9
+            ? 0.18
+            : mapView.zoom >= 7
+              ? 0.29
+              : 0.41
+          const patchIntensity = type === 'hurricaneRainRadar'
             ? Math.max(0, Math.min(1, point.value / 70))
-            : Math.max(0, Math.min(1, point.value / 55))
+            : Math.max(0.18, Math.min(0.86, point.value / 100))
 
-        const radius = type === 'wind'
-          ? 4.5 + (normalized * 5.2)
-          : 5.6 + (normalized * 6.2)
+          const baseColor = type === 'cloudCoverage'
+            ? toGrayHex(point.value, 194, 228)
+            : type === 'stormCloudCoverage'
+              ? toGrayHex(point.value, 150, 206)
+              : toBlueHex(point.value, 150, 242)
 
-        const marker = leaflet.circleMarker([point.lat, point.lng], {
-          radius,
-          color,
-          fillColor: color,
-          fillOpacity: 0.42 + (envOpacity[type] * 0.55),
-          opacity: 0.58 + (envOpacity[type] * 0.42),
-          weight: 1.8,
-          pane: 'weatherEnvPane',
-          className: 'weather-env-point',
-        }).addTo(targetLayer)
+          const driftHeading = typeof point.directionDeg === 'number'
+            ? point.directionDeg
+            : ((index * 31) + mapView.zoom * 9) % 360
 
-        marker.bindTooltip(`${type}: ${point.value}${data.units ? ` ${data.units}` : ''}`, {
-          direction: 'top',
-          opacity: 0.92,
-        })
+          const massCenters = buildCloudMassCenters([point.lat, point.lng], driftHeading, scale)
+
+          massCenters.forEach((massCenter, massIndex) => {
+            const outerPatch = buildCloudPatch(
+              massCenter,
+              patchIntensity,
+              index + (point.value * 0.04) + (massIndex * 1.73),
+              scale * (massIndex === 0 ? 1 : 0.6),
+            )
+
+            const outer = leaflet.polygon(outerPatch, {
+              color: baseColor,
+              fillColor: baseColor,
+              fillOpacity: type === 'hurricaneRainRadar'
+                ? 0.1 + (envOpacity[type] * 0.2)
+                : 0.08 + (envOpacity[type] * 0.16),
+              opacity: type === 'hurricaneRainRadar'
+                ? 0.1 + (envOpacity[type] * 0.2)
+                : 0.08 + (envOpacity[type] * 0.14),
+              weight: 0,
+              pane: 'weatherEnvPane',
+              className: type === 'cloudCoverage'
+                ? 'weather-cloud-patch'
+                : type === 'stormCloudCoverage'
+                  ? 'weather-storm-cloud-patch'
+                  : point.value >= 35
+                    ? 'weather-hurricane-mid-band-patch'
+                    : 'weather-hurricane-edge-band-patch',
+            }).addTo(targetLayer)
+
+            if (massIndex === 0) {
+              outer.bindTooltip(`${type}: ${point.value}${data.units ? ` ${data.units}` : ''}`, {
+                direction: 'top',
+                opacity: 0.92,
+              })
+            }
+          })
+
+          if (type !== 'cloudCoverage') {
+            const innerColor = type === 'stormCloudCoverage' ? '#dbeafe' : toBlueHex(point.value + 20, 170, 250)
+            const innerPatch = buildCloudPatch(
+              [point.lat, point.lng],
+              patchIntensity,
+              index + (point.value * 0.11),
+              scale * 0.62,
+            )
+
+            leaflet.polygon(innerPatch, {
+              color: innerColor,
+              fillColor: innerColor,
+              fillOpacity: type === 'hurricaneRainRadar'
+                ? 0.16 + (envOpacity[type] * 0.24)
+                : 0.07 + (envOpacity[type] * 0.12),
+              opacity: type === 'hurricaneRainRadar'
+                ? 0.16 + (envOpacity[type] * 0.26)
+                : 0.08 + (envOpacity[type] * 0.12),
+              weight: 0,
+              pane: 'weatherEnvPane',
+              className: 'weather-cloud-patch-inner',
+            }).addTo(targetLayer)
+          }
+
+          if (type === 'hurricaneRainRadar' && typeof point.directionDeg === 'number') {
+            const vectorEnd = projectPoint([point.lat, point.lng], point.directionDeg, 0.26)
+            leaflet.polyline([[point.lat, point.lng], vectorEnd], {
+              color: '#38bdf8',
+              opacity: 0.46 + (envOpacity.hurricaneRainRadar * 0.36),
+              weight: 1.2,
+              pane: 'weatherEnvPane',
+              className: 'weather-hurricane-radar-vector',
+            }).addTo(targetLayer)
+          }
+          return
+        }
 
       })
     })
@@ -538,6 +1214,9 @@ export function WeatherMapContainer({
 
     const smokePoints = envLayers.smoke?.vectorPoints ?? []
     const pressurePoints = envLayers.pressure?.vectorPoints ?? []
+    const cloudCoveragePoints = envLayers.cloudCoverage?.vectorPoints ?? []
+    const hurricaneRainPoints = envLayers.hurricaneRainRadar?.vectorPoints ?? []
+    const lightningPoints = envLayers.lightningTracking?.vectorPoints ?? []
 
     const clearHoverProbe = () => {
       if (hoverTimerRef.current) {
@@ -553,7 +1232,10 @@ export function WeatherMapContainer({
 
       const smokeEnabled = envVisibility.smoke && smokePoints.length > 0
       const pressureEnabled = envVisibility.pressure && pressurePoints.length > 0
-      if (!smokeEnabled && !pressureEnabled) return
+      const cloudEnabled = envVisibility.cloudCoverage && cloudCoveragePoints.length > 0
+      const hurricaneRainEnabled = envVisibility.hurricaneRainRadar && hurricaneRainPoints.length > 0
+      const lightningEnabled = envVisibility.lightningTracking && lightningPoints.length > 0
+      if (!smokeEnabled && !pressureEnabled && !cloudEnabled && !hurricaneRainEnabled && !lightningEnabled) return
 
       const lat = event.latlng.lat
       const lng = event.latlng.lng
@@ -561,11 +1243,17 @@ export function WeatherMapContainer({
       hoverTimerRef.current = window.setTimeout(() => {
         const nearestSmoke = smokeEnabled ? findNearestPoint(smokePoints, lat, lng) : undefined
         const nearestPressure = pressureEnabled ? findNearestPoint(pressurePoints, lat, lng) : undefined
-        if (!nearestSmoke && !nearestPressure) return
+        const nearestCloudCoverage = cloudEnabled ? findNearestPoint(cloudCoveragePoints, lat, lng) : undefined
+        const nearestHurricaneRain = hurricaneRainEnabled ? findNearestPoint(hurricaneRainPoints, lat, lng) : undefined
+        const nearestLightning = lightningEnabled ? findNearestPoint(lightningPoints, lat, lng) : undefined
+        if (!nearestSmoke && !nearestPressure && !nearestCloudCoverage && !nearestHurricaneRain && !nearestLightning) return
 
         const lines: string[] = []
         if (nearestSmoke) lines.push(`AQI ${Math.round(nearestSmoke.value)}`)
         if (nearestPressure) lines.push(`Pressure ${Math.round(nearestPressure.value)} hPa`)
+        if (nearestCloudCoverage) lines.push(`Cloud ${Math.round(nearestCloudCoverage.value)}%`)
+        if (nearestHurricaneRain) lines.push(`Hurricane rain ${nearestHurricaneRain.value.toFixed(1)} mm/hr`)
+        if (nearestLightning) lines.push(`Lightning ${nearestLightning.value.toFixed(0)} min ago`)
 
         envProbeTooltipRef.current = leaflet.tooltip({
           direction: 'top',
@@ -596,7 +1284,7 @@ export function WeatherMapContainer({
       map.off('movestart', clearHoverProbe)
       clearHoverProbe()
     }
-  }, [envLayers.pressure?.vectorPoints, envLayers.smoke?.vectorPoints, envVisibility.pressure, envVisibility.smoke, mapReady])
+  }, [envLayers.cloudCoverage?.vectorPoints, envLayers.hurricaneRainRadar?.vectorPoints, envLayers.lightningTracking?.vectorPoints, envLayers.pressure?.vectorPoints, envLayers.smoke?.vectorPoints, envVisibility.cloudCoverage, envVisibility.hurricaneRainRadar, envVisibility.lightningTracking, envVisibility.pressure, envVisibility.smoke, mapReady])
 
   return (
     <div className="weather-map-surface">
