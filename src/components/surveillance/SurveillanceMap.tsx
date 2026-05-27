@@ -60,6 +60,7 @@ type ProjectedTarget = TargetTrack & {
 }
 
 const TARGET_ANGLES = [-31, 0, 22, 47]
+const TARGET_ROTATION_MS = 10_000
 const TARGET_PHASE_MS = {
   entry: 620,
   acquire: 1_850,
@@ -128,7 +129,11 @@ function geoDistance(a: { lat: number; lng: number }, b: { lat: number; lng: num
   return Math.sqrt((latDelta * latDelta) + (lngDelta * lngDelta))
 }
 
-function pickDistributedTargets(alerts: VisualizationAlert[], nodes: VisualizationNode[]): Array<VisualizationAlert & { lat: number; lng: number; category: TargetCategory }> {
+function pickDistributedTargets(
+  alerts: VisualizationAlert[],
+  nodes: VisualizationNode[],
+  rotationStep = 0,
+): Array<VisualizationAlert & { lat: number; lng: number; category: TargetCategory }> {
   const nodeById = new Map(nodes.map((node) => [node.id, node]))
   const prioritized = alerts
     .filter((alert) => !alert.resolved)
@@ -151,8 +156,13 @@ function pickDistributedTargets(alerts: VisualizationAlert[], nodes: Visualizati
 
   if (prioritized.length === 0) return []
 
+  const rotationStart = Math.max(0, rotationStep % prioritized.length)
+  const rotated = rotationStart === 0
+    ? prioritized
+    : [...prioritized.slice(rotationStart), ...prioritized.slice(0, rotationStart)]
+
   const picked: Array<VisualizationAlert & { lat: number; lng: number; category: TargetCategory }> = []
-  for (const candidate of prioritized) {
+  for (const candidate of rotated) {
     if (picked.length >= 4) break
     if (picked.length === 0) {
       picked.push(candidate)
@@ -165,7 +175,7 @@ function pickDistributedTargets(alerts: VisualizationAlert[], nodes: Visualizati
     }
   }
 
-  for (const candidate of prioritized) {
+  for (const candidate of rotated) {
     if (picked.length >= 4) break
     if (picked.some((target) => target.id === candidate.id)) continue
     picked.push(candidate)
@@ -187,13 +197,17 @@ export function SurveillanceMap({ altitude, focusedNodeId, nodes, alerts, wirefr
   const containerRef = useRef<HTMLDivElement | null>(null)
   const controllerRef = useRef<MapController | null>(null)
   const lockMetaRef = useRef<Map<string, { angle: number }>>(new Map())
+  const alertsSignatureRef = useRef('')
   const [isFullscreen, setIsFullscreen] = useState(false)
+  const [isMobileFullscreenFallback, setIsMobileFullscreenFallback] = useState(false)
   const [targetTracks, setTargetTracks] = useState<TargetTrack[]>([])
   const [projectedTargets, setProjectedTargets] = useState<ProjectedTarget[]>([])
   const [now, setNow] = useState(Date.now())
+  const rotationStep = Math.floor(now / TARGET_ROTATION_MS)
+  const fullscreenActive = isFullscreen || isMobileFullscreenFallback
 
   const selectedTargets = useMemo(() => {
-    const nextTargets = pickDistributedTargets(alerts, nodes)
+    const nextTargets = pickDistributedTargets(alerts, nodes, rotationStep)
     const activeIds = new Set(nextTargets.map((target) => target.id))
 
     Array.from(lockMetaRef.current.keys()).forEach((id) => {
@@ -235,11 +249,13 @@ export function SurveillanceMap({ altitude, focusedNodeId, nodes, alerts, wirefr
         threatLabel: threat,
       }
     })
-  }, [alerts, nodes])
+  }, [alerts, nodes, rotationStep])
 
   useEffect(() => {
     const handleFullscreenChange = () => {
-      setIsFullscreen(document.fullscreenElement === surfaceRef.current)
+      const doc = document as Document & { webkitFullscreenElement?: Element | null }
+      const fullscreenElement = doc.fullscreenElement ?? doc.webkitFullscreenElement ?? null
+      setIsFullscreen(fullscreenElement === surfaceRef.current)
       controllerRef.current?.setAltitude(altitude)
     }
 
@@ -249,6 +265,28 @@ export function SurveillanceMap({ altitude, focusedNodeId, nodes, alerts, wirefr
       document.removeEventListener('fullscreenchange', handleFullscreenChange)
     }
   }, [altitude])
+
+  useEffect(() => {
+    if (!isMobileFullscreenFallback) return
+
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+
+    const onEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setIsMobileFullscreenFallback(false)
+      }
+    }
+
+    window.addEventListener('keydown', onEscape)
+    controllerRef.current?.setAltitude(altitude)
+
+    return () => {
+      document.body.style.overflow = previousOverflow
+      window.removeEventListener('keydown', onEscape)
+      controllerRef.current?.setAltitude(altitude)
+    }
+  }, [altitude, isMobileFullscreenFallback])
 
   useEffect(() => {
     let disposed = false
@@ -284,6 +322,9 @@ export function SurveillanceMap({ altitude, focusedNodeId, nodes, alerts, wirefr
   }, [altitude])
 
   useEffect(() => {
+    const sig = `${nodes.length}:${alerts.length}:${alerts.map(a => `${a.id}${a.resolved ? 'r' : ''}`).join(',')}:${focusedNodeId}`
+    if (sig === alertsSignatureRef.current) return
+    alertsSignatureRef.current = sig
     controllerRef.current?.setData(nodes, alerts, focusedNodeId)
   }, [alerts, focusedNodeId, nodes])
 
@@ -397,8 +438,17 @@ export function SurveillanceMap({ altitude, focusedNodeId, nodes, alerts, wirefr
 
   useEffect(() => {
     let rafId = 0
+    let lastTickAt = 0
 
-    const tick = () => {
+    const tick = (timestamp: number) => {
+      // Cap to ~30fps — projection only needs to update when map is panned
+      // or target tracks change (which is already gated by the 200ms `now` ticker).
+      if (timestamp - lastTickAt < 33) {
+        rafId = window.requestAnimationFrame(tick)
+        return
+      }
+      lastTickAt = timestamp
+
       const controller = controllerRef.current
       const container = containerRef.current
       if (!controller || !container || targetTracks.length === 0) {
@@ -445,27 +495,57 @@ export function SurveillanceMap({ altitude, focusedNodeId, nodes, alerts, wirefr
     const surface = surfaceRef.current
     if (!surface) return
 
+    const doc = document as Document & {
+      webkitExitFullscreen?: () => Promise<void> | void
+      webkitFullscreenElement?: Element | null
+    }
+    const surfaceWithVendor = surface as HTMLDivElement & {
+      webkitRequestFullscreen?: () => Promise<void> | void
+    }
+
+    const fullscreenElement = doc.fullscreenElement ?? doc.webkitFullscreenElement ?? null
+    const usingNativeFullscreen = fullscreenElement === surface
+
     try {
-      if (document.fullscreenElement === surface) {
-        await document.exitFullscreen()
-      } else {
-        await surface.requestFullscreen()
+      if (fullscreenActive) {
+        if (usingNativeFullscreen) {
+          if (document.exitFullscreen) {
+            await document.exitFullscreen()
+          } else if (doc.webkitExitFullscreen) {
+            await doc.webkitExitFullscreen()
+          }
+        }
+        setIsMobileFullscreenFallback(false)
+        return
       }
+
+      if (surface.requestFullscreen) {
+        await surface.requestFullscreen()
+        return
+      }
+
+      if (surfaceWithVendor.webkitRequestFullscreen) {
+        await surfaceWithVendor.webkitRequestFullscreen()
+        return
+      }
+
+      setIsMobileFullscreenFallback(true)
     } catch {
-      // Ignore fullscreen API errors for unsupported browsers/policies.
+      // Mobile browsers can reject fullscreen requests; use CSS fallback.
+      setIsMobileFullscreenFallback(true)
     }
   }
 
   return (
-    <div ref={surfaceRef} className={`surveillance-surface surveillance-surface--map flex-1 ${edgeToEdge ? 'surveillance-surface--map-edge' : ''}`}>
+    <div ref={surfaceRef} className={`surveillance-surface surveillance-surface--map flex-1 ${edgeToEdge ? 'surveillance-surface--map-edge' : ''} ${isMobileFullscreenFallback ? 'surveillance-surface--map-mobile-fullscreen' : ''}`}>
       <button
         type="button"
         onClick={() => void toggleFullscreen()}
         className="surveillance-map-fullscreen-btn"
-        aria-label={isFullscreen ? 'Exit fullscreen map' : 'Enter fullscreen map'}
+        aria-label={fullscreenActive ? 'Exit fullscreen map' : 'Enter fullscreen map'}
       >
-        {isFullscreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
-        <span>{isFullscreen ? 'Exit Fullscreen' : 'Fullscreen'}</span>
+        {fullscreenActive ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+        <span>{fullscreenActive ? 'Exit Fullscreen' : 'Fullscreen'}</span>
       </button>
       <div ref={containerRef} className="surveillance-map-canvas" />
       <div

@@ -67,7 +67,7 @@ export function SideNav({ mobileOpen = false, onNavigate }: SideNavProps) {
     <nav
       className={clsx(
         'w-[190px] md:w-[190px] shrink-0 flex flex-col border-r border-[var(--border)] bg-[var(--bg)] overflow-y-auto',
-        'fixed md:static inset-y-0 left-0 z-40 md:z-auto transition-transform duration-200 ease-out',
+        'fixed md:static inset-y-0 left-0 z-[5000] md:z-auto transition-transform duration-200 ease-out',
         mobileOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0',
       )}
     >

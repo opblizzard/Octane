@@ -21,7 +21,7 @@ export function AppShell() {
         <SideNav mobileOpen={navOpen} onNavigate={() => setNavOpen(false)} />
         {navOpen && (
           <button
-            className="md:hidden fixed inset-0 bg-black/45 z-30"
+            className="md:hidden fixed inset-0 bg-black/45 z-[4900]"
             aria-label="Close navigation"
             onClick={() => setNavOpen(false)}
           />

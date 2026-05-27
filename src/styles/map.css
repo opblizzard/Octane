@@ -35,8 +35,8 @@
 
 .surveillance-map-fullscreen-btn {
   position: absolute;
-  top: 10px;
-  right: 10px;
+  top: max(10px, env(safe-area-inset-top));
+  right: max(10px, env(safe-area-inset-right));
   z-index: 620;
   display: inline-flex;
   align-items: center;
@@ -62,6 +62,27 @@
   max-width: none;
   max-height: none;
   border-radius: 0;
+}
+
+.surveillance-surface--map-mobile-fullscreen {
+  position: fixed !important;
+  inset: 0;
+  width: 100vw;
+  height: 100dvh;
+  max-width: none;
+  max-height: none;
+  border-radius: 0;
+  border: none;
+  z-index: 1400;
+}
+
+.surveillance-surface--map-mobile-fullscreen .surveillance-targeting-banner {
+  top: calc(12px + env(safe-area-inset-top));
+}
+
+.surveillance-surface--map-mobile-fullscreen .surveillance-targeting-footer,
+.surveillance-surface--map-mobile-fullscreen .surveillance-surface__caption {
+  bottom: calc(12px + env(safe-area-inset-bottom));
 }
 
 .surveillance-surface--map-edge {
@@ -104,7 +125,7 @@
 
 .surveillance-map-canvas .leaflet-pane,
 .surveillance-map-canvas .leaflet-control-container {
-  filter: drop-shadow(0 0 8px rgba(107, 246, 255, 0.22));
+  /* drop-shadow removed — forces full pane compositing on every frame */
 }
 
 .surveillance-map-canvas .leaflet-tooltip {
@@ -116,45 +137,38 @@
 
 .surveillance-map-canvas .surveillance-gridline {
   stroke-dasharray: 6 8;
-  animation: surveillance-grid-dash 22s linear infinite;
 }
 
 .surveillance-map-canvas .surveillance-continent-mesh {
   stroke-linecap: round;
-  animation: surveillance-grid-dash 12s linear infinite;
 }
 
 .surveillance-map-canvas .surveillance-mesh-node {
-  filter: drop-shadow(0 0 8px rgba(121, 246, 255, 0.95));
+  /* drop-shadow removed — per-element compositing cost */
 }
 
 .surveillance-map-canvas .surveillance-audio-wire {
   stroke-linecap: round;
   stroke-dasharray: 0;
-  filter: drop-shadow(0 0 10px rgba(122, 248, 255, 0.7));
-  animation: surveillance-audio-wire-pulse 0.9s ease-in-out infinite;
 }
 
 .surveillance-map-canvas .surveillance-audio-dot {
-  filter: drop-shadow(0 0 12px rgba(164, 252, 255, 0.9));
-  animation: surveillance-audio-dot-pulse 0.7s ease-in-out infinite;
+  /* filter and animation removed — JS drives opacity/radius directly */
 }
 
 .surveillance-map-canvas .surveillance-audio-scatter-dot {
-  filter: drop-shadow(0 0 9px rgba(140, 248, 255, 0.72));
-  animation: none;
+  /* filter removed — JS drives opacity/radius directly */
 }
 
 .surveillance-map-canvas .surveillance-global-event-dot {
-  filter: drop-shadow(0 0 10px rgba(255, 255, 255, 0.3));
-  animation: surveillance-global-event-pulse 2.6s ease-in-out infinite;
+  /* filter removed; slow opacity pulse retained */
+  animation: surveillance-global-event-pulse 4s ease-in-out infinite;
 }
 
 .surveillance-map-canvas .surveillance-route-line {
   stroke-dasharray: 8 6;
   stroke-linecap: round;
   animation: surveillance-grid-dash var(--route-speed, 7s) linear infinite;
-  filter: drop-shadow(0 0 6px rgba(126, 247, 255, calc(var(--route-glow, 0.45))));
 }
 
 .surveillance-map-canvas .surveillance-route-line--normal {
@@ -167,8 +181,8 @@
 
 .surveillance-map-canvas .surveillance-route-line--critical {
   stroke-opacity: 0.8;
-  animation-name: surveillance-grid-dash, surveillance-route-critical-pulse;
-  animation-duration: var(--route-speed, 4.2s), 1.4s;
+  animation-name: surveillance-grid-dash, surveillance-route-critical-opacity;
+  animation-duration: var(--route-speed, 4.2s), 1.6s;
   animation-timing-function: linear, ease-in-out;
   animation-iteration-count: infinite, infinite;
 }
@@ -187,8 +201,7 @@
 
 .surveillance-map-canvas .surveillance-alert-ring,
 .surveillance-map-canvas .surveillance-latency-ring {
-  animation: surveillance-ring-pulse 1.8s ease-in-out infinite;
-  transform-origin: center;
+  /* animation removed — JS drives radius/opacity via setStyle */
 }
 
 .surveillance-targeting-overlay {
@@ -410,7 +423,8 @@
 
 .surveillance-target-reticle,
 .surveillance-target-label {
-  filter: brightness(calc(0.88 + (var(--target-audio-energy) * 0.24)));
+  /* GPU-composited opacity instead of filter: brightness — far cheaper */
+  opacity: calc(0.76 + (var(--target-audio-energy) * 0.24));
 }
 
 @keyframes surveillance-grid-dash {
@@ -423,9 +437,9 @@
   50% { opacity: 0.9; }
 }
 
-@keyframes surveillance-route-critical-pulse {
-  0%, 100% { filter: drop-shadow(0 0 8px rgba(255, 92, 74, 0.58)); }
-  50% { filter: drop-shadow(0 0 14px rgba(255, 92, 74, 0.9)); }
+@keyframes surveillance-route-critical-opacity {
+  0%, 100% { stroke-opacity: 0.62; }
+  50% { stroke-opacity: 1; }
 }
 
 @keyframes surveillance-audio-wire-pulse {

@@ -60,6 +60,16 @@ type PeaceMarker = {
   summary: string
 }
 
+type ResolveFeedItem = {
+  id: string
+  modality: string
+  disturbanceType: string
+  summary: string
+  status: 'CONVERGED' | 'IN PROGRESS'
+  createdAt: number
+  markerLabel?: string
+}
+
 type ApiPayload<T> = { success?: boolean; data?: T }
 
 type AudioBands = {
@@ -101,7 +111,8 @@ const GLOBAL_EVENT_DOT_LEGEND: Array<{ category: GlobalEventCategory; label: str
   { category: 'service', label: 'Service', color: '#14b8a6', description: 'Closures, maintenance, utility, and service outages.' },
 ]
 
-const LIVE_FEED_REFRESH_MS = 5_000
+const CORE_REFRESH_MS = 5_000
+const ALERT_FEED_REFRESH_MS = 1_200
 const AUDIO_UI_COMMIT_MS = 64
 
 function normalizeAlertCategory(rawType: string): GlobalEventCategory {
@@ -143,6 +154,12 @@ function clamp01(value: number): number {
   return Math.max(0, Math.min(1, value))
 }
 
+function buildTargetResolveSummary(alert: SurveillanceAlert): string {
+  const category = normalizeAlertCategory(alert.type)
+  const scope = alert.serverId ? `Node ${alert.serverId}` : 'Global route surface'
+  return `${scope} target lock is active for ${category} disturbance. Peaceful stabilization protocol is tracking this signal in real time.`
+}
+
 function MapLegend({ altitude, refreshMs }: { altitude: number; refreshMs: number }) {
   const refreshSeconds = Math.max(1, Math.round(refreshMs / 1000))
   return (
@@ -178,7 +195,6 @@ function Sparkline({ values, color }: { values: number[]; color: string }) {
 }
 
 export default function Surveillance() {
-  const feedSessionStartRef = useRef<number>(Date.now())
   const [snapshot, setSnapshot] = useState<SurveillanceSnapshot | null>(null)
   const [nodes, setNodes] = useState<SurveillanceNode[]>(FALLBACK_NODES)
   const [alerts, setAlerts] = useState<SurveillanceAlert[]>([])
@@ -193,6 +209,7 @@ export default function Surveillance() {
   const [audioBands, setAudioBands] = useState<AudioBands>({ bass: 0, mid: 0, treble: 0, pulse: 0, beat: 0 })
   const [wireframesVisible, setWireframesVisible] = useState(true)
   const [peaceMarkers, setPeaceMarkers] = useState<PeaceMarker[]>([])
+  const [alertFeedClearedAt, setAlertFeedClearedAt] = useState<number>(0)
   const alertsRef = useRef<HTMLDivElement | null>(null)
   const reloadDataRef = useRef<(() => Promise<void>) | null>(null)
   const audioBandsRef = useRef<AudioBands>({ bass: 0, mid: 0, treble: 0, pulse: 0, beat: 0 })
@@ -325,16 +342,13 @@ export default function Surveillance() {
 
     const load = async () => {
       try {
-        const [snapshotResponse, nodesResponse, alertsResponse] = await Promise.all([
+        const [snapshotResponse, nodesResponse] = await Promise.all([
           fetch('/api/v6/surveillance/snapshot'),
           fetch('/api/v6/surveillance/nodes'),
-          fetch('/api/v6/surveillance/alerts'),
         ])
 
         const snapshotPayload = await snapshotResponse.json() as ApiPayload<SurveillanceSnapshot>
         const nodesPayload = await nodesResponse.json() as ApiPayload<SurveillanceNode[]>
-        const alertsPayload = await alertsResponse.json() as ApiPayload<SurveillanceAlert[]>
-        const freshAlerts = (alertsPayload.data ?? []).filter((alert) => alert.timestamp >= feedSessionStartRef.current)
 
         let nextMarkers: PeaceMarker[] = []
         try {
@@ -347,22 +361,8 @@ export default function Surveillance() {
 
         if (!cancelled) {
           const nextNodes = nodesPayload.data?.length ? nodesPayload.data : FALLBACK_NODES
-          const activeAlerts = freshAlerts.filter((alert) => !alert.resolved)
-          const weatherAlerts = activeAlerts.filter((alert) => normalizeAlertCategory(alert.type) === 'weather').length
-          const trafficAlerts = activeAlerts.filter((alert) => normalizeAlertCategory(alert.type) === 'traffic').length
-          const avgLoad = nextNodes.reduce((sum, node) => sum + node.loadPercent, 0) / Math.max(1, nextNodes.length)
-
-          const liveSample: TelemetrySample = {
-            timestamp: Date.now(),
-            alerts: activeAlerts.length,
-            traffic: clamp01((avgLoad / 100) * 0.76 + Math.min(trafficAlerts, 8) * 0.03),
-            weather: clamp01((weatherAlerts / Math.max(activeAlerts.length, 1)) * 0.9),
-          }
-
           setSnapshot(snapshotPayload.data ?? null)
           setNodes(nextNodes)
-          setAlerts(freshAlerts)
-          setTelemetrySamples((current) => [...current.slice(-119), liveSample])
           setPeaceMarkers(nextMarkers)
           setError(null)
           setLastSync(Date.now())
@@ -383,7 +383,7 @@ export default function Surveillance() {
     reloadDataRef.current = load
 
     void load()
-    const timer = window.setInterval(load, LIVE_FEED_REFRESH_MS)
+    const timer = window.setInterval(load, CORE_REFRESH_MS)
     return () => {
       cancelled = true
       window.clearInterval(timer)
@@ -392,10 +392,63 @@ export default function Surveillance() {
   }, [])
 
   useEffect(() => {
+    const activeAlerts = alerts.filter((alert) => !alert.resolved)
+    const weatherAlerts = activeAlerts.filter((alert) => normalizeAlertCategory(alert.type) === 'weather').length
+    const trafficAlerts = activeAlerts.filter((alert) => normalizeAlertCategory(alert.type) === 'traffic').length
+    const avgLoad = nodes.reduce((sum, node) => sum + node.loadPercent, 0) / Math.max(1, nodes.length)
+
+    const liveSample: TelemetrySample = {
+      timestamp: Date.now(),
+      alerts: activeAlerts.length,
+      traffic: clamp01((avgLoad / 100) * 0.76 + Math.min(trafficAlerts, 8) * 0.03),
+      weather: clamp01((weatherAlerts / Math.max(activeAlerts.length, 1)) * 0.9),
+    }
+
+    setTelemetrySamples((current) => [...current.slice(-119), liveSample])
+  }, [alerts, nodes])
+
+  useEffect(() => {
+    let cancelled = false
+
+    const loadAlerts = async () => {
+      try {
+        const alertsResponse = await fetch('/api/v6/surveillance/alerts?onlyActive=false')
+        const alertsPayload = await alertsResponse.json() as ApiPayload<SurveillanceAlert[]>
+        const feed = [...(alertsPayload.data ?? [])].sort((left, right) => right.timestamp - left.timestamp)
+
+        if (!cancelled) {
+          setAlerts(feed)
+          setLastSync(Date.now())
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : String(err))
+          setAlerts([])
+        }
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    }
+
+    void loadAlerts()
+    const timer = window.setInterval(loadAlerts, ALERT_FEED_REFRESH_MS)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [])
+
+  useEffect(() => {
     emitTelemetryEvent('scene:focus', { focusedNodeId })
   }, [focusedNodeId])
 
   const liveAlerts = alerts.filter((alert) => !alert.resolved)
+  const closureFeed = useMemo(() => {
+    const next = alerts
+      .filter((alert) => alert.timestamp >= alertFeedClearedAt)
+      .sort((left, right) => right.timestamp - left.timestamp)
+    return next.slice(0, 32)
+  }, [alertFeedClearedAt, alerts])
   const liveCategoryCounts = useMemo(() => {
     return liveAlerts.reduce<Record<GlobalEventCategory, number>>((acc, alert) => {
       const category = normalizeAlertCategory(alert.type)
@@ -403,6 +456,58 @@ export default function Surveillance() {
       return acc
     }, { traffic: 0, weather: 0, police: 0, service: 0 })
   }, [liveAlerts])
+  const peacefulResolveFeed = useMemo<ResolveFeedItem[]>(() => {
+    const markerByAlertId = new Map<string, PeaceMarker>()
+    peaceMarkers.forEach((marker) => {
+      if (!marker.triggerAlertId) return
+      if (!markerByAlertId.has(marker.triggerAlertId)) {
+        markerByAlertId.set(marker.triggerAlertId, marker)
+      }
+    })
+
+    const linkedMarkerIds = new Set<string>()
+    const mergedFromTargets = liveAlerts.slice(0, 8).map<ResolveFeedItem>((alert) => {
+      const linkedMarker = markerByAlertId.get(alert.id)
+      if (linkedMarker) linkedMarkerIds.add(linkedMarker.marker)
+
+      if (linkedMarker) {
+        return {
+          id: `marker:${linkedMarker.marker}`,
+          modality: linkedMarker.modality,
+          disturbanceType: linkedMarker.disturbanceType,
+          summary: linkedMarker.summary,
+          status: linkedMarker.converged ? 'CONVERGED' : 'IN PROGRESS',
+          createdAt: linkedMarker.createdAt,
+          markerLabel: linkedMarker.marker,
+        }
+      }
+
+      return {
+        id: `target:${alert.id}`,
+        modality: 'target_sync',
+        disturbanceType: alert.type,
+        summary: buildTargetResolveSummary(alert),
+        status: 'IN PROGRESS',
+        createdAt: alert.timestamp,
+      }
+    })
+
+    const unlinkedMarkers = peaceMarkers
+      .filter((marker) => !linkedMarkerIds.has(marker.marker))
+      .map<ResolveFeedItem>((marker) => ({
+        id: `marker:${marker.marker}`,
+        modality: marker.modality,
+        disturbanceType: marker.disturbanceType,
+        summary: marker.summary,
+        status: marker.converged ? 'CONVERGED' : 'IN PROGRESS',
+        createdAt: marker.createdAt,
+        markerLabel: marker.marker,
+      }))
+
+    return [...mergedFromTargets, ...unlinkedMarkers]
+      .sort((left, right) => right.createdAt - left.createdAt)
+      .slice(0, 8)
+  }, [liveAlerts, peaceMarkers])
 
   useEffect(() => {
     alertsRef.current?.scrollTo({ top: 0, behavior: 'smooth' })
@@ -443,7 +548,7 @@ export default function Surveillance() {
         <Panel title="2D Earth Transit Map" subtitle={mapSubtitle} className="h-full">
           <div className="flex h-full min-h-0 flex-col gap-3 pt-3">
             <div className="flex flex-wrap items-center justify-between gap-3 px-3">
-              <MapLegend altitude={altitude} refreshMs={LIVE_FEED_REFRESH_MS} />
+              <MapLegend altitude={altitude} refreshMs={ALERT_FEED_REFRESH_MS} />
               <div className="flex flex-wrap items-center gap-2">
                 <button
                   type="button"
@@ -546,9 +651,18 @@ export default function Surveillance() {
             </div>
           </Panel>
 
-          <Panel title="Live Closures & Alerts" subtitle={error ?? 'recently updated map data'}>
+          <Panel title="Live Closures & Alerts" subtitle={error ?? `live event feed • ${Math.round(ALERT_FEED_REFRESH_MS / 100) / 10}s cadence`}>
+            <div className="mb-2 flex items-center justify-end gap-2 text-[10px] uppercase tracking-[0.14em]">
+              <button
+                type="button"
+                onClick={() => setAlertFeedClearedAt(Date.now())}
+                className="rounded border border-[var(--border)] bg-[var(--surface2)] px-2 py-1 text-[var(--muted)] hover:text-[var(--text)]"
+              >
+                Clear Feed
+              </button>
+            </div>
             <div ref={alertsRef} className="flex max-h-[355px] flex-col gap-2 overflow-y-auto pr-1 [mask-image:linear-gradient(to_bottom,transparent,black_10%,black_90%,transparent)]">
-              {liveAlerts.slice(0, 5).map((alert) => (
+              {closureFeed.slice(0, 14).map((alert) => (
                 <button
                   key={alert.id}
                   type="button"
@@ -564,13 +678,16 @@ export default function Surveillance() {
                       <div className="mt-1 text-sm font-semibold text-[var(--text)]">{alert.title}</div>
                       <div className="mt-1 text-[11px] leading-5 text-[var(--muted)]">{alert.description}</div>
                     </div>
-                    <StatusBadge status={alert.severity === 'CRITICAL' || alert.severity === 'EMERGENCY' ? 'crit' : alert.severity === 'WARNING' ? 'warn' : 'info'} label={alert.severity} />
+                    <StatusBadge
+                      status={alert.resolved ? 'ok' : alert.severity === 'CRITICAL' || alert.severity === 'EMERGENCY' ? 'crit' : alert.severity === 'WARNING' ? 'warn' : 'info'}
+                      label={alert.resolved ? 'RESOLVED' : alert.severity}
+                    />
                   </div>
                 </button>
               ))}
-              {liveAlerts.length === 0 && (
+              {closureFeed.length === 0 && (
                 <div className="rounded border border-[var(--border)] bg-[var(--bg)] p-3 text-sm text-[var(--muted)]">
-                  No active alerts. The surveillance fabric is stable and polling fresh data.
+                  No alerts in the current live window. Feed will refill automatically as new alerts and resolves stream in.
                 </div>
               )}
             </div>
@@ -578,24 +695,26 @@ export default function Surveillance() {
 
           <Panel title="Peaceful Resolve Feed" subtitle="self-healing markers from runtime stability protocol">
             <div className="flex max-h-[250px] flex-col gap-2 overflow-y-auto pr-1 [mask-image:linear-gradient(to_bottom,transparent,black_10%,black_90%,transparent)]">
-              {peaceMarkers.slice(0, 6).map((marker) => (
+              {peacefulResolveFeed.map((item) => (
                 <div
-                  key={marker.marker}
+                  key={item.id}
                   className="rounded border border-[var(--border)] bg-[var(--surface2)] p-3"
                 >
                   <div className="flex items-center justify-between gap-2">
-                    <div className="text-[10px] uppercase tracking-[0.16em] text-[var(--accent)]">{marker.modality.replaceAll('_', ' ')}</div>
-                    <StatusBadge status={marker.converged ? 'ok' : 'warn'} label={marker.converged ? 'CONVERGED' : 'IN PROGRESS'} />
+                    <div className="text-[10px] uppercase tracking-[0.16em] text-[var(--accent)]">{item.modality.replaceAll('_', ' ')}</div>
+                    <StatusBadge status={item.status === 'CONVERGED' ? 'ok' : 'warn'} label={item.status} />
                   </div>
-                  <div className="mt-1 text-sm font-semibold text-[var(--text)]">{marker.disturbanceType.replaceAll('_', ' ')}</div>
-                  <div className="mt-1 text-[11px] leading-5 text-[var(--muted)]">{marker.summary}</div>
+                  <div className="mt-1 text-sm font-semibold text-[var(--text)]">{item.disturbanceType.replaceAll('_', ' ')}</div>
+                  <div className="mt-1 text-[11px] leading-5 text-[var(--muted)]">{item.summary}</div>
                   <div className="mt-2 flex flex-wrap items-center gap-2 text-[9px] uppercase tracking-[0.14em] text-[var(--muted)]">
-                    <span className="rounded border border-[var(--border)] bg-[var(--bg)] px-2 py-1">Marker {marker.marker}</span>
-                    <span className="rounded border border-[var(--border)] bg-[var(--bg)] px-2 py-1">{formatRelative(marker.createdAt)}</span>
+                    {item.markerLabel
+                      ? <span className="rounded border border-[var(--border)] bg-[var(--bg)] px-2 py-1">Marker {item.markerLabel}</span>
+                      : <span className="rounded border border-[var(--border)] bg-[var(--bg)] px-2 py-1">Linked target</span>}
+                    <span className="rounded border border-[var(--border)] bg-[var(--bg)] px-2 py-1">{formatRelative(item.createdAt)}</span>
                   </div>
                 </div>
               ))}
-              {peaceMarkers.length === 0 && (
+              {peacefulResolveFeed.length === 0 && (
                 <div className="rounded border border-[var(--border)] bg-[var(--bg)] p-3 text-sm text-[var(--muted)]">
                   No peace markers yet. Runtime self-healing will post here when alerts trigger restorative cycles.
                 </div>

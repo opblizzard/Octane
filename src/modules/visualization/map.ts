@@ -70,9 +70,9 @@ const AUDIO_DOT_COLORS: Array<{ color: string; fillColor: string }> = [
   { color: '#c3a6ff', fillColor: '#e1d2ff' },
 ]
 
-const MAX_REACTIVE_BURSTS = 12
-const AMBIENT_AUDIO_DOT_POOL_SIZE = 36
-const AUDIO_UPDATE_INTERVAL_MS = 140
+const MAX_REACTIVE_BURSTS = 6
+const AMBIENT_AUDIO_DOT_POOL_SIZE = 16
+const AUDIO_UPDATE_INTERVAL_MS = 220
 
 const NETWORK_POINTS: LatLng[] = [
   [64, -150], [57, -105], [49, -125], [40, -100], [32, -85], [22, -102], [15, -90], [6, -79],
@@ -619,53 +619,52 @@ export function initMap(container: HTMLElement, config: VisualizationConfig): Ma
   }
 
   const updateReactiveMesh = () => {
+    motionStep += 1
+
+    // When wireframes are hidden, only prune any in-flight bursts and return early.
     if (!wireframesVisible) {
+      if (reactiveBursts.length > 0) pruneReactiveBursts()
       return
     }
 
-    motionStep += 1
-    const skipPassiveFrame = !audioReactiveEnabled
-      && reactiveBursts.length === 0
-      && (motionStep % 3 !== 0)
-    if (skipPassiveFrame) return
+    // When audio is off, skip all setStyle work — static CSS handles base appearance.
+    // Only prune bursts that were spawned while audio was on and haven't expired yet.
+    if (!audioReactiveEnabled) {
+      if (reactiveBursts.length > 0) pruneReactiveBursts()
+      return
+    }
 
-    const fallbackPulse = 0.14 + (Math.sin(motionStep * 0.05) * 0.08)
-    const pulse = audioReactiveEnabled ? clamp01((audioReactiveBands.pulse * 0.7) + (audioReactiveLevel * 0.3)) : fallbackPulse
-    const beat = audioReactiveEnabled ? clamp01(audioReactiveBands.beat) : 0.08 + (Math.sin((motionStep * 0.09) + 1.2) * 0.04)
-    const bass = audioReactiveEnabled ? clamp01(audioReactiveBands.bass) : 0.1 + (Math.sin((motionStep * 0.07) + 0.5) * 0.05)
-    const mid = audioReactiveEnabled ? clamp01(audioReactiveBands.mid) : 0.11 + (Math.sin((motionStep * 0.06) + 2.4) * 0.05)
-    const treble = audioReactiveEnabled ? clamp01(audioReactiveBands.treble) : 0.12 + (Math.sin((motionStep * 0.11) + 0.8) * 0.05)
+    // --- Audio-reactive path ---
+    const pulse = clamp01((audioReactiveBands.pulse * 0.7) + (audioReactiveLevel * 0.3))
+    const beat = clamp01(audioReactiveBands.beat)
+    const bass = clamp01(audioReactiveBands.bass)
+    const mid = clamp01(audioReactiveBands.mid)
+    const treble = clamp01(audioReactiveBands.treble)
 
-    gridAudioProfiles.forEach((profile, index) => {
-      const shimmer = 0.5 + (Math.sin((motionStep * 0.13) + profile.phase + (index * 0.23)) * 0.5)
-      const energy = clamp01((pulse * 0.5) + (treble * 0.32) + (mid * 0.18) + (shimmer * 0.2))
-      const visibility = clamp01((energy * 1.12) - 0.14)
-      profile.line.setStyle({
-        opacity: 0.02 + (visibility * ((profile.baseOpacity * 0.7) + (0.34 * profile.intensity))),
-        weight: 0.18 + (visibility * ((profile.baseWeight * 0.7) + (0.8 * profile.intensity))),
+    // Skip grid line updates — too many elements (30+) and barely visible under tiles.
+    // Update continent mesh every other tick to halve the per-interval DOM work.
+    if (motionStep % 2 === 0) {
+      continentMeshLines.forEach((line, index) => {
+        const stride = 0.74 + (((index % 9) / 8) * 0.6)
+        const shimmer = 0.5 + (Math.sin((motionStep * 0.1 * stride) + index) * 0.5)
+        const energy = clamp01((pulse * (0.62 + (shimmer * 0.38))) + (beat * 0.24))
+        line.setStyle({
+          opacity: 0.22 + (energy * 0.68),
+          weight: 0.85 + (energy * 1.6),
+        })
       })
-    })
 
-    continentMeshLines.forEach((line, index) => {
-      const stride = 0.74 + (((index % 9) / 8) * 0.6)
-      const shimmer = 0.5 + (Math.sin((motionStep * 0.1 * stride) + index) * 0.5)
-      const energy = clamp01((pulse * (0.62 + (shimmer * 0.38))) + (beat * 0.24))
-      line.setStyle({
-        opacity: 0.22 + (energy * 0.68),
-        weight: 0.85 + (energy * 1.6),
+      continentMeshNodes.forEach((node, index) => {
+        const jitter = 0.55 + (Math.sin((motionStep * 0.16) + index) * 0.45)
+        const nodeEnergy = clamp01((pulse * 0.75) + (jitter * 0.25))
+        const radius = (index % 7 === 0 ? 3.1 : 2.0) + (nodeEnergy * (2.4 + (bass * 0.8)))
+        node.setRadius(radius)
+        node.setStyle({
+          fillOpacity: 0.24 + (nodeEnergy * 0.72),
+          opacity: 0.32 + (nodeEnergy * 0.64),
+        })
       })
-    })
-
-    continentMeshNodes.forEach((node, index) => {
-      const jitter = 0.55 + (Math.sin((motionStep * 0.16) + index) * 0.45)
-      const nodeEnergy = clamp01((pulse * 0.75) + (jitter * 0.25))
-      const radius = (index % 7 === 0 ? 3.1 : 2.0) + (nodeEnergy * (2.4 + (bass * 0.8)))
-      node.setRadius(radius)
-      node.setStyle({
-        fillOpacity: 0.24 + (nodeEnergy * 0.72),
-        opacity: 0.32 + (nodeEnergy * 0.64),
-      })
-    })
+    }
 
     routeAudioProfiles.forEach((profile, index) => {
       const shimmer = 0.5 + (Math.sin((motionStep * 0.14) + profile.phase + (index * 0.17)) * 0.5)
@@ -689,20 +688,13 @@ export function initMap(container: HTMLElement, config: VisualizationConfig): Ma
 
     const loudness = clamp01((audioReactiveLevel * 0.45) + (pulse * 0.35) + (bass * 0.2))
     const tempo = clamp01((beat * 0.65) + (mid * 0.2) + (treble * 0.15))
-    const activeAmbientDots = updateAmbientAudioDots(loudness, tempo, treble, pulse)
+    updateAmbientAudioDots(loudness, tempo, treble, pulse)
 
-    const burstLoad = reactiveBursts.length / MAX_REACTIVE_BURSTS
-    const dotLoad = activeAmbientDots / AMBIENT_AUDIO_DOT_POOL_SIZE
-    const performancePressure = clamp01((burstLoad * 0.45) + (dotLoad * 0.55))
-
-    const spawnChance = audioReactiveEnabled
-      ? clamp01((0.08 + (pulse * 0.44) + (beat * 0.34)) * (1 - (performancePressure * 0.55)))
-      : 0.04
+    const performancePressure = clamp01((reactiveBursts.length / MAX_REACTIVE_BURSTS) * 0.65)
+    const spawnChance = clamp01((0.08 + (pulse * 0.44) + (beat * 0.34)) * (1 - (performancePressure * 0.55)))
 
     if (Math.random() < spawnChance) {
-      const burstCount = audioReactiveEnabled
-        ? Math.max(1, Math.round((1 + (beat * 3)) * (1 - (performancePressure * 0.65))))
-        : 1
+      const burstCount = Math.max(1, Math.round((1 + (beat * 3)) * (1 - (performancePressure * 0.65))))
       const intensity = clamp01(((pulse * 0.68) + (beat * 0.32)) * (1 - (performancePressure * 0.18)))
       for (let index = 0; index < burstCount; index += 1) {
         spawnReactiveBurst(intensity)
