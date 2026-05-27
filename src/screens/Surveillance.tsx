@@ -518,6 +518,34 @@ export default function Surveillance() {
         </Panel>
 
         <div className="flex flex-col gap-4">
+          <Panel title="Server Country Presence" subtitle="city-scale monitoring in the 2D view">
+            <div className="flex flex-col gap-2 max-h-[315px] overflow-y-auto pr-1">
+              {nodes.map((node) => (
+                <button
+                  key={node.id}
+                  type="button"
+                  onClick={() => setFocusedNodeId(node.id)}
+                  className={`rounded border p-3 text-left transition-colors ${focusedNode.id === node.id ? 'border-[var(--accent)] bg-[rgba(0,245,255,0.07)]' : 'border-[var(--border)] bg-[var(--surface2)] hover:border-[var(--accent)]/60'}`}
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <Server size={12} className="text-[var(--accent)]" />
+                        <span className="font-semibold text-[var(--text)]">{node.country}</span>
+                      </div>
+                      <div className="mt-1 text-[11px] text-[var(--muted)]">{node.name} · {node.region}</div>
+                    </div>
+                    <StatusBadge status={node.status === 'CRITICAL' ? 'crit' : node.status === 'DEGRADED' ? 'warn' : 'ok'} label={node.status} />
+                  </div>
+                  <div className="mt-2 flex items-center gap-2 text-[10px] uppercase tracking-[0.14em] text-[var(--muted)]">
+                    <MapPin size={11} /> Country presence only
+                    <span className="ml-auto">{node.latencyMs}ms latency</span>
+                  </div>
+                </button>
+              ))}
+            </div>
+          </Panel>
+
           <Panel title="Live Closures & Alerts" subtitle={error ?? 'recently updated map data'}>
             <div ref={alertsRef} className="flex max-h-[355px] flex-col gap-2 overflow-y-auto pr-1 [mask-image:linear-gradient(to_bottom,transparent,black_10%,black_90%,transparent)]">
               {liveAlerts.slice(0, 5).map((alert) => (
@@ -545,34 +573,6 @@ export default function Surveillance() {
                   No active alerts. The surveillance fabric is stable and polling fresh data.
                 </div>
               )}
-            </div>
-          </Panel>
-
-          <Panel title="Server Country Presence" subtitle="city-scale monitoring in the 2D view">
-            <div className="flex flex-col gap-2 max-h-[315px] overflow-y-auto pr-1">
-              {nodes.map((node) => (
-                <button
-                  key={node.id}
-                  type="button"
-                  onClick={() => setFocusedNodeId(node.id)}
-                  className={`rounded border p-3 text-left transition-colors ${focusedNode.id === node.id ? 'border-[var(--accent)] bg-[rgba(0,245,255,0.07)]' : 'border-[var(--border)] bg-[var(--surface2)] hover:border-[var(--accent)]/60'}`}
-                >
-                  <div className="flex items-center justify-between gap-3">
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <Server size={12} className="text-[var(--accent)]" />
-                        <span className="font-semibold text-[var(--text)]">{node.country}</span>
-                      </div>
-                      <div className="mt-1 text-[11px] text-[var(--muted)]">{node.name} · {node.region}</div>
-                    </div>
-                    <StatusBadge status={node.status === 'CRITICAL' ? 'crit' : node.status === 'DEGRADED' ? 'warn' : 'ok'} label={node.status} />
-                  </div>
-                  <div className="mt-2 flex items-center gap-2 text-[10px] uppercase tracking-[0.14em] text-[var(--muted)]">
-                    <MapPin size={11} /> Country presence only
-                    <span className="ml-auto">{node.latencyMs}ms latency</span>
-                  </div>
-                </button>
-              ))}
             </div>
           </Panel>
 
