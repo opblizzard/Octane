@@ -52,11 +52,20 @@ type AmbientAudioDot = {
   fillColor: string
 }
 
-type GlobalEventCategory = 'traffic' | 'weather' | 'police' | 'service'
+type GlobalEventCategory = 'traffic' | 'weather' | 'wildfire' | 'police' | 'service'
+
+type GlobalEventDotProfile = {
+  dot: CircleMarker
+  baseRadius: number
+  severityFactor: number
+  phase: number
+  category: GlobalEventCategory
+}
 
 const GLOBAL_EVENT_DOT_COLORS: Record<GlobalEventCategory, { stroke: string; fill: string; label: string }> = {
   traffic: { stroke: '#f97316', fill: '#fdba74', label: 'Traffic' },
   weather: { stroke: '#3b82f6', fill: '#93c5fd', label: 'Weather' },
+  wildfire: { stroke: '#a855f7', fill: '#d8b4fe', label: 'Fire' },
   police: { stroke: '#ef4444', fill: '#fca5a5', label: 'Police' },
   service: { stroke: '#14b8a6', fill: '#5eead4', label: 'Service' },
 }
@@ -72,7 +81,9 @@ const AUDIO_DOT_COLORS: Array<{ color: string; fillColor: string }> = [
 
 const MAX_REACTIVE_BURSTS = 6
 const AMBIENT_AUDIO_DOT_POOL_SIZE = 16
-const AUDIO_UPDATE_INTERVAL_MS = 220
+const AUDIO_UPDATE_INTERVAL_MS = 120
+const WIREFRAME_STAGGER_BUCKETS = 2
+const MAX_QUEUED_BURST_SPAWNS = 10
 
 const NETWORK_POINTS: LatLng[] = [
   [64, -150], [57, -105], [49, -125], [40, -100], [32, -85], [22, -102], [15, -90], [6, -79],
@@ -236,6 +247,9 @@ function randomPoint(points: LatLng[]): LatLng {
 
 function normalizeAlertCategory(rawType: string): GlobalEventCategory {
   const value = rawType.trim().toLowerCase()
+  if (value.includes('wildfire') || value.includes('wild fire') || value.includes('brush fire') || value.includes('forest fire') || value.includes('fire')) {
+    return 'wildfire'
+  }
   if (value.includes('weather') || value.includes('storm') || value.includes('flood') || value.includes('wind')) {
     return 'weather'
   }
@@ -254,24 +268,9 @@ function normalizeAlertCategory(rawType: string): GlobalEventCategory {
   return 'traffic'
 }
 
-function hashStringToInt(value: string): number {
-  let hash = 0
-  for (let index = 0; index < value.length; index += 1) {
-    hash = ((hash << 5) - hash) + value.charCodeAt(index)
-    hash |= 0
-  }
-  return Math.abs(hash)
-}
-
-function fallbackAlertPoint(alert: VisualizationAlert): LatLng {
-  const hash = hashStringToInt(`${alert.id}:${alert.type}`)
-  const source = NETWORK_POINTS[hash % NETWORK_POINTS.length]
-  const latOffset = (((hash >> 3) % 120) / 120 - 0.5) * 6
-  const lngOffset = (((hash >> 11) % 120) / 120 - 0.5) * 8
-  return [
-    Math.max(-67, Math.min(81, source[0] + latOffset)),
-    wrapLongitude(source[1] + lngOffset),
-  ]
+function normalizeAlertCategoryFromAlert(alert: VisualizationAlert): GlobalEventCategory {
+  const combined = `${alert.type} ${alert.title ?? ''} ${alert.description ?? ''}`
+  return normalizeAlertCategory(combined)
 }
 
 export function initMap(container: HTMLElement, config: VisualizationConfig): MapController {
@@ -313,6 +312,7 @@ export function initMap(container: HTMLElement, config: VisualizationConfig): Ma
   const reactiveBursts: ReactiveBurst[] = []
   const ambientAudioDots: AmbientAudioDot[] = []
   const gridAudioProfiles: WireAudioProfile[] = []
+  const globalEventDotProfiles: GlobalEventDotProfile[] = []
   let routeAudioProfiles: WireAudioProfile[] = []
   let alertRingProfiles: RingAudioProfile[] = []
 
@@ -321,6 +321,7 @@ export function initMap(container: HTMLElement, config: VisualizationConfig): Ma
   let audioReactiveBands: AudioReactiveBands = { bass: 0, mid: 0, treble: 0, pulse: 0, beat: 0 }
   let motionStep = 0
   let wireframesVisible = true
+  let queuedBurstSpawns = 0
 
   const applyWireframeVisibility = (visible: boolean) => {
     wireframesVisible = visible
@@ -618,19 +619,65 @@ export function initMap(container: HTMLElement, config: VisualizationConfig): Ma
     return activeCount
   }
 
+  const severityScale = (severity: VisualizationAlert['severity']): number => {
+    if (severity === 'EMERGENCY') return 1.18
+    if (severity === 'CRITICAL') return 1.08
+    if (severity === 'WARNING') return 1
+    return 0.92
+  }
+
+  const baseGlobalEventDotRadius = (zoom: number): number => {
+    if (zoom <= 2) return 1.65
+    if (zoom <= 4) return 2
+    if (zoom <= 6) return 2.35
+    if (zoom <= 8) return 2.7
+    return 3.05
+  }
+
+  const applyGlobalEventDotSizing = () => {
+    const zoom = map.getZoom()
+    const zoomBase = baseGlobalEventDotRadius(zoom)
+    globalEventDotProfiles.forEach((profile, index) => {
+      const notifying = 0.5 + (Math.sin((motionStep * 0.12) + profile.phase + (index * 0.19)) * 0.5)
+      const categoryBoost = profile.category === 'wildfire' ? 0.24 : profile.category === 'police' ? 0.18 : 0.12
+      const radius = zoomBase + ((profile.baseRadius - 1.8) * 0.24) + (profile.severityFactor * 0.28) + ((notifying + categoryBoost) * 0.44)
+      profile.dot.setRadius(Math.max(1.5, Math.min(4.2, radius)))
+      profile.dot.setStyle({
+        opacity: 0.5 + (notifying * 0.44),
+        fillOpacity: 0.46 + (notifying * 0.42),
+      })
+    })
+  }
+
   const updateReactiveMesh = () => {
     motionStep += 1
+    const staggerBucket = motionStep % WIREFRAME_STAGGER_BUCKETS
+
+    const flushBurstQueue = (pulse: number, beat: number) => {
+      if (queuedBurstSpawns <= 0) return
+      const dynamicBudget = pulse > 0.78 || beat > 0.72 ? 2 : 1
+      const budget = Math.min(dynamicBudget, queuedBurstSpawns)
+      const smoothedIntensity = clamp01((pulse * 0.64) + (beat * 0.36))
+      for (let index = 0; index < budget; index += 1) {
+        spawnReactiveBurst(smoothedIntensity)
+      }
+      queuedBurstSpawns = Math.max(0, queuedBurstSpawns - budget)
+    }
 
     // When wireframes are hidden, only prune any in-flight bursts and return early.
     if (!wireframesVisible) {
+      queuedBurstSpawns = 0
       if (reactiveBursts.length > 0) pruneReactiveBursts()
+      if (globalEventDotProfiles.length > 0 && motionStep % 2 === 0) applyGlobalEventDotSizing()
       return
     }
 
     // When audio is off, skip all setStyle work — static CSS handles base appearance.
     // Only prune bursts that were spawned while audio was on and haven't expired yet.
     if (!audioReactiveEnabled) {
+      queuedBurstSpawns = 0
       if (reactiveBursts.length > 0) pruneReactiveBursts()
+      if (globalEventDotProfiles.length > 0) applyGlobalEventDotSizing()
       return
     }
 
@@ -642,9 +689,9 @@ export function initMap(container: HTMLElement, config: VisualizationConfig): Ma
     const treble = clamp01(audioReactiveBands.treble)
 
     // Skip grid line updates — too many elements (30+) and barely visible under tiles.
-    // Update continent mesh every other tick to halve the per-interval DOM work.
-    if (motionStep % 2 === 0) {
-      continentMeshLines.forEach((line, index) => {
+    // Stagger mesh, routes, and ring updates so pulse spikes do not update every element at once.
+    continentMeshLines.forEach((line, index) => {
+      if ((index % WIREFRAME_STAGGER_BUCKETS) !== staggerBucket) return
         const stride = 0.74 + (((index % 9) / 8) * 0.6)
         const shimmer = 0.5 + (Math.sin((motionStep * 0.1 * stride) + index) * 0.5)
         const energy = clamp01((pulse * (0.62 + (shimmer * 0.38))) + (beat * 0.24))
@@ -654,7 +701,8 @@ export function initMap(container: HTMLElement, config: VisualizationConfig): Ma
         })
       })
 
-      continentMeshNodes.forEach((node, index) => {
+    continentMeshNodes.forEach((node, index) => {
+      if ((index % WIREFRAME_STAGGER_BUCKETS) !== staggerBucket) return
         const jitter = 0.55 + (Math.sin((motionStep * 0.16) + index) * 0.45)
         const nodeEnergy = clamp01((pulse * 0.75) + (jitter * 0.25))
         const radius = (index % 7 === 0 ? 3.1 : 2.0) + (nodeEnergy * (2.4 + (bass * 0.8)))
@@ -664,9 +712,9 @@ export function initMap(container: HTMLElement, config: VisualizationConfig): Ma
           opacity: 0.32 + (nodeEnergy * 0.64),
         })
       })
-    }
 
     routeAudioProfiles.forEach((profile, index) => {
+      if ((index % WIREFRAME_STAGGER_BUCKETS) !== staggerBucket) return
       const shimmer = 0.5 + (Math.sin((motionStep * 0.14) + profile.phase + (index * 0.17)) * 0.5)
       const energy = clamp01((pulse * 0.56) + (beat * 0.34) + (mid * 0.2) + (shimmer * 0.26))
       const visibility = clamp01((energy * 1.18) - 0.2)
@@ -677,6 +725,7 @@ export function initMap(container: HTMLElement, config: VisualizationConfig): Ma
     })
 
     alertRingProfiles.forEach((profile, index) => {
+      if ((index % WIREFRAME_STAGGER_BUCKETS) !== staggerBucket) return
       const shimmer = 0.5 + (Math.sin((motionStep * 0.22) + profile.phase + (index * 0.31)) * 0.5)
       const ringEnergy = clamp01((beat * 0.52) + (pulse * 0.34) + (treble * 0.22) + (shimmer * 0.24))
       profile.ring.setRadius(profile.baseRadius + (ringEnergy * 8.2))
@@ -689,18 +738,17 @@ export function initMap(container: HTMLElement, config: VisualizationConfig): Ma
     const loudness = clamp01((audioReactiveLevel * 0.45) + (pulse * 0.35) + (bass * 0.2))
     const tempo = clamp01((beat * 0.65) + (mid * 0.2) + (treble * 0.15))
     updateAmbientAudioDots(loudness, tempo, treble, pulse)
+    applyGlobalEventDotSizing()
 
     const performancePressure = clamp01((reactiveBursts.length / MAX_REACTIVE_BURSTS) * 0.65)
     const spawnChance = clamp01((0.08 + (pulse * 0.44) + (beat * 0.34)) * (1 - (performancePressure * 0.55)))
 
     if (Math.random() < spawnChance) {
-      const burstCount = Math.max(1, Math.round((1 + (beat * 3)) * (1 - (performancePressure * 0.65))))
-      const intensity = clamp01(((pulse * 0.68) + (beat * 0.32)) * (1 - (performancePressure * 0.18)))
-      for (let index = 0; index < burstCount; index += 1) {
-        spawnReactiveBurst(intensity)
-      }
+      const burstCount = Math.max(1, Math.round((1 + (beat * 2.4)) * (1 - (performancePressure * 0.65))))
+      queuedBurstSpawns = Math.min(MAX_QUEUED_BURST_SPAWNS, queuedBurstSpawns + burstCount)
     }
 
+    flushBurstQueue(pulse, beat)
     pruneReactiveBursts()
   }
 
@@ -743,6 +791,7 @@ export function initMap(container: HTMLElement, config: VisualizationConfig): Ma
 
   map.on('dragstart', markUserNavigation)
   map.on('zoomstart', markUserNavigation)
+  map.on('zoomend', applyGlobalEventDotSizing)
 
   const applyRouteDynamics = (line: Polyline, avgLatency: number, riskLevel: 'normal' | 'elevated' | 'critical') => {
     const element = line.getElement() as SVGPathElement | null
@@ -790,6 +839,7 @@ export function initMap(container: HTMLElement, config: VisualizationConfig): Ma
     alertsRings = []
     latencyRings = []
     globalEventDots = []
+    globalEventDotProfiles.length = 0
     routeAudioProfiles = []
     alertRingProfiles = []
 
@@ -859,38 +909,57 @@ export function initMap(container: HTMLElement, config: VisualizationConfig): Ma
 
     for (const alert of alerts) {
       const node = alert.serverId ? nodeById.get(alert.serverId) : undefined
-      const category = normalizeAlertCategory(alert.type)
+      const category = normalizeAlertCategoryFromAlert(alert)
       const palette = GLOBAL_EVENT_DOT_COLORS[category]
-      const alertLocation: LatLng = (
+      const alertLocation: LatLng | null = (
         typeof alert.lat === 'number' && typeof alert.lng === 'number'
           ? [alert.lat, wrapLongitude(alert.lng)]
           : alert.location && typeof alert.location.lat === 'number' && typeof alert.location.lng === 'number'
             ? [alert.location.lat, wrapLongitude(alert.location.lng)]
           : node
             ? [node.lat, node.lng]
-            : fallbackAlertPoint(alert)
+            : null
       )
 
+      if (!alertLocation) continue
+
+      const baseRadius = 2.05 * severityScale(alert.severity)
+
       const eventDot = L.circleMarker(alertLocation, {
-        radius: 6.2,
+        radius: baseRadius,
         color: palette.stroke,
         fillColor: palette.fill,
-        fillOpacity: 0.78,
-        opacity: 0.92,
-        weight: 1.4,
+        fillOpacity: 0.84,
+        opacity: 0.9,
+        weight: 1,
         className: 'surveillance-global-event-dot',
-      }).addTo(globalEventLayer)
+      })
+      const applyPulseOffset = () => {
+        const element = eventDot.getElement() as SVGElement | null
+        if (!element) return
+        const offset = -((Math.random() * 3.4) + 0.2)
+        element.style.setProperty('--event-pulse-offset', `${offset.toFixed(2)}s`)
+      }
+      eventDot.on('add', applyPulseOffset)
+      eventDot.addTo(globalEventLayer)
+      applyPulseOffset()
 
       const dotTitle = alert.title ?? `${palette.label} alert`
-      const dotSubtitle = `${alert.type} · ${alert.severity}`
-      eventDot.bindTooltip(dotTitle, {
+      const dotSubtitle = `${palette.label} · ${alert.type} · ${alert.severity}`
+      const dotBody = alert.description?.trim() || 'Active call in progress.'
+      eventDot.bindTooltip(`<strong>ACTIVE CALL</strong><br/>${dotTitle}<br/><span>${dotSubtitle}</span><br/><span>${dotBody}</span>`, {
         direction: 'top',
         opacity: 0.92,
-      })
-      eventDot.on('mouseover', () => {
-        eventDot.setTooltipContent(`${dotTitle} (${dotSubtitle})`)
+        sticky: true,
       })
       globalEventDots.push(eventDot)
+      globalEventDotProfiles.push({
+        dot: eventDot,
+        baseRadius,
+        severityFactor: severityScale(alert.severity),
+        phase: Math.random() * Math.PI * 2,
+        category,
+      })
 
       if (!node) continue
 
@@ -905,6 +974,8 @@ export function initMap(container: HTMLElement, config: VisualizationConfig): Ma
       alertsRings.push(ring)
       alertRingProfiles.push({ ring, baseRadius: 10, phase: (node.lat * 0.05) + (node.lng * 0.03) })
     }
+
+    applyGlobalEventDotSizing()
 
     if (!hasInitialBounds) {
       map.fitBounds(WORLD_BOUNDS, { padding: [8, 8], animate: true, duration: 0.6 })
@@ -972,8 +1043,10 @@ export function initMap(container: HTMLElement, config: VisualizationConfig): Ma
         dot.remove()
       })
       globalEventDots.length = 0
+      globalEventDotProfiles.length = 0
       map.off('dragstart', markUserNavigation)
       map.off('zoomstart', markUserNavigation)
+      map.off('zoomend', applyGlobalEventDotSizing)
       resizeObserver.disconnect()
       map.remove()
     },

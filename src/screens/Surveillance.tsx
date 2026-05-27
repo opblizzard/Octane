@@ -81,7 +81,7 @@ type AudioBands = {
   beat: number
 }
 
-type GlobalEventCategory = 'traffic' | 'weather' | 'police' | 'service'
+type GlobalEventCategory = 'traffic' | 'weather' | 'wildfire' | 'police' | 'service'
 
 const ENDPOINTS = [
   '/api/v6/surveillance/snapshot',
@@ -108,6 +108,7 @@ const COUNTRY_CENTERS: Record<string, { lat: number; lng: number }> = {
 const GLOBAL_EVENT_DOT_LEGEND: Array<{ category: GlobalEventCategory; label: string; color: string; description: string }> = [
   { category: 'traffic', label: 'Traffic', color: '#f97316', description: 'Road congestion, detours, and transit flow incidents.' },
   { category: 'weather', label: 'Weather', color: '#3b82f6', description: 'Storm, rain, wind, and climate-related disruptions.' },
+  { category: 'wildfire', label: 'Fire', color: '#a855f7', description: 'Wildfire and active fire perimeter incidents.' },
   { category: 'police', label: 'Police', color: '#ef4444', description: 'Police/security incidents and law-enforcement alerts.' },
   { category: 'service', label: 'Service', color: '#14b8a6', description: 'Closures, maintenance, utility, and service outages.' },
 ]
@@ -119,6 +120,7 @@ const FEED_TIMELINE_LIMIT = 96
 
 function normalizeAlertCategory(rawType: string): GlobalEventCategory {
   const value = rawType.trim().toLowerCase()
+  if (value.includes('wildfire') || value.includes('wild fire') || value.includes('brush fire') || value.includes('forest fire') || value.includes('fire')) return 'wildfire'
   if (value.includes('weather') || value.includes('storm') || value.includes('flood') || value.includes('wind')) return 'weather'
   if (value.includes('police') || value.includes('law') || value.includes('crime') || value.includes('security')) return 'police'
   if (value.includes('service') || value.includes('closure') || value.includes('utility') || value.includes('maintenance') || value.includes('outage')) return 'service'
@@ -534,10 +536,10 @@ export default function Surveillance() {
   }, [alertFeedClearedAt, feedAlerts])
   const liveCategoryCounts = useMemo(() => {
     return liveAlerts.reduce<Record<GlobalEventCategory, number>>((acc, alert) => {
-      const category = normalizeAlertCategory(alert.type)
+      const category = normalizeAlertCategory(`${alert.type} ${alert.title} ${alert.description}`)
       acc[category] += 1
       return acc
-    }, { traffic: 0, weather: 0, police: 0, service: 0 })
+    }, { traffic: 0, weather: 0, wildfire: 0, police: 0, service: 0 })
   }, [liveAlerts])
   const peacefulResolveFeed = useMemo<ResolveFeedItem[]>(() => {
     const markerByAlertId = new Map<string, PeaceMarker>()
@@ -805,10 +807,11 @@ export default function Surveillance() {
             </div>
           </Panel>
 
-          <Panel title="Live Route Surface" subtitle="traffic + weather + police + service">
-            <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
-              <MetricCard label="Traffic" value="LIVE" accent="var(--accent)" sub="Road congestion & detours" />
-              <MetricCard label="Weather" value="LIVE" accent="var(--warn)" sub="Storm & visibility closures" />
+          <Panel title="Live Route Surface" subtitle="traffic + weather + fire + police + service">
+            <div className="grid grid-cols-2 gap-2 md:grid-cols-5">
+              <MetricCard label="Traffic" value={liveCategoryCounts.traffic} accent="var(--accent)" sub="Road congestion & detours" />
+              <MetricCard label="Weather" value={liveCategoryCounts.weather} accent="var(--warn)" sub="Storm & visibility closures" />
+              <MetricCard label="Fire" value={liveCategoryCounts.wildfire} accent="#a855f7" sub="Active fire perimeters" />
               <MetricCard label="Police" value={liveCategoryCounts.police} accent="var(--red)" sub="Law/security incidents" />
               <MetricCard label="Service" value={liveCategoryCounts.service} accent="var(--accent-2)" sub="Closures & utility events" />
             </div>
